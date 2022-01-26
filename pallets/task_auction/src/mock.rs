@@ -1,4 +1,4 @@
-use crate as pallet_template;
+use crate as pallet_task_auction;
 use frame_support::parameter_types;
 use frame_system as system;
 use sp_core::H256;
@@ -18,7 +18,7 @@ frame_support::construct_runtime!(
 		UncheckedExtrinsic = UncheckedExtrinsic,
 	{
 		System: frame_system::{Pallet, Call, Config, Storage, Event<T>},
-		TemplateModule: pallet_template::{Pallet, Call, Storage, Event<T>},
+		TaskAuction: pallet_task_auction::{Pallet, Call, Storage, Event<T>},
 	}
 );
 
@@ -53,7 +53,7 @@ impl system::Config for Test {
 	type OnSetCode = ();
 }
 
-impl pallet_template::Config for Test {
+impl pallet_task_auction::Config for Test {
 	type Event = Event;
 }
 

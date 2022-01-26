@@ -1,7 +1,7 @@
 [workspace]
 members = [
     'node',
-    'pallets/template',
+    'pallets/task_auction',
     'runtime',
 ]
 [profile.release]

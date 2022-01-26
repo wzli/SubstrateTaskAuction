@@ -1,4 +1,4 @@
-use node_template_runtime::{
+use substrate_task_auction_runtime::{
 	AccountId, AuraConfig, BalancesConfig, GenesisConfig, GrandpaConfig, Signature, SudoConfig,
 	SystemConfig, WASM_BINARY,
 };
