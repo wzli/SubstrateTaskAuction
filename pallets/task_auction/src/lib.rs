@@ -1,8 +1,5 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
-/// Edit this file to define custom logic or remove it if it is not needed.
-/// Learn more about FRAME and the core library of Substrate FRAME pallets:
-/// <https://docs.substrate.io/v3/runtime/frame>
 pub use pallet::*;
 
 #[cfg(test)]
@@ -19,11 +16,26 @@ pub mod pallet {
 	use frame_support::pallet_prelude::*;
 	use frame_system::pallet_prelude::*;
 
+	use frame_support::traits::Currency;
+
+	type BalanceOf<T> =
+		<<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
+
+	#[derive(Encode, Decode, TypeInfo)]
+	#[scale_info(skip_type_params(T))]
+	pub struct Auction<T: Config> {
+		pub employer: T::AccountId,
+		pub arbitrator: T::AccountId,
+		pub deposit: BalanceOf<T>,
+		pub deadline: T::BlockNumber,
+	}
+
 	/// Configure the pallet by specifying the parameters and types on which it depends.
 	#[pallet::config]
 	pub trait Config: frame_system::Config {
 		/// Because this pallet emits events, it depends on the runtime's definition of an event.
 		type Event: From<Event<Self>> + IsType<<Self as frame_system::Config>::Event>;
+		type Currency: Currency<Self::AccountId>;
 	}
 
 	#[pallet::pallet]
@@ -33,10 +45,18 @@ pub mod pallet {
 	// The pallet's runtime storage items.
 	// https://docs.substrate.io/v3/runtime/storage
 	#[pallet::storage]
+	#[pallet::getter(fn auction_count)]
+	pub(super) type AuctionCount<T: Config> = StorageValue<_, u32, ValueQuery>;
+
+	#[pallet::storage]
+	#[pallet::getter(fn auctions)]
+	pub(super) type Auctions<T: Config> = StorageMap<_, Twox64Concat, u32, Auction<T>, OptionQuery>;
+
+	#[pallet::storage]
 	#[pallet::getter(fn something)]
 	// Learn more about declaring storage items:
 	// https://docs.substrate.io/v3/runtime/storage#declaring-storage-items
-	pub type Something<T> = StorageValue<_, u32>;
+	pub(super) type Something<T> = StorageValue<_, u32>;
 
 	// Pallets use events to inform users when important changes are made.
 	// https://docs.substrate.io/v3/runtime/events-and-errors
@@ -73,6 +93,7 @@ pub mod pallet {
 
 			// Update storage.
 			<Something<T>>::put(something);
+			<AuctionCount<T>>::put(something);
 
 			// Emit an event.
 			Self::deposit_event(Event::SomethingStored(something, who));
