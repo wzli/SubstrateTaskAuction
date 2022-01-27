@@ -260,7 +260,6 @@ parameter_types! {
 	pub const TransactionByteFee: Balance = 1;
 	pub OperationalFeeMultiplier: u8 = 5;
 }
-
 impl pallet_transaction_payment::Config for Runtime {
 	type OnChargeTransaction = CurrencyAdapter<Balances, ()>;
 	type TransactionByteFee = TransactionByteFee;
@@ -277,7 +276,9 @@ impl pallet_sudo::Config for Runtime {
 /// Configure the pallet-template in pallets/template.
 impl pallet_task_auction::Config for Runtime {
 	type Event = Event;
-    type Currency = Balances;
+	type Currency = Balances;
+	type MinBounty = ExistentialDeposit;
+	type MinDeposit = ExistentialDeposit;
 }
 
 // Create the runtime by composing the FRAME pallets that were previously configured.

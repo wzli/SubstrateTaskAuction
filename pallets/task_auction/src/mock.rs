@@ -77,9 +77,20 @@ impl pallet_balances::Config for Test {
 impl pallet_task_auction::Config for Test {
 	type Event = Event;
 	type Currency = Balances;
+	type MinBounty = ExistentialDeposit;
+	type MinDeposit = ExistentialDeposit;
 }
 
 // Build genesis storage according to the mock runtime.
 pub fn new_test_ext() -> sp_io::TestExternalities {
-	system::GenesisConfig::default().build_storage::<Test>().unwrap().into()
+	let mut t = frame_system::GenesisConfig::default().build_storage::<Test>().unwrap();
+	pallet_balances::GenesisConfig::<Test> {
+		// Provide some initial balances
+		balances: vec![(0xA, 10000), (0xB, 11000), (0xC, 12000), (0xD, 13000), (0xE, 14000)],
+	}
+	.assimilate_storage(&mut t)
+	.unwrap();
+	let mut ext: sp_io::TestExternalities = t.into();
+	ext.execute_with(|| System::set_block_number(1));
+	ext
 }

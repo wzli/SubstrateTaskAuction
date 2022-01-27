@@ -50,6 +50,11 @@ pub mod pallet {
 		/// Because this pallet emits events, it depends on the runtime's definition of an event.
 		type Event: From<Event<Self>> + IsType<<Self as frame_system::Config>::Event>;
 		type Currency: Currency<Self::AccountId>;
+
+		#[pallet::constant] // put the constant in metadata
+		type MinBounty: Get<BalanceOf<Self>>;
+		#[pallet::constant] // put the constant in metadata
+		type MinDeposit: Get<BalanceOf<Self>>;
 	}
 
 	#[pallet::pallet]
@@ -82,8 +87,11 @@ pub mod pallet {
 		/// parameters. [something, who]
 		SomethingStored(u32, T::AccountId),
 
-		/// Auction created. \[auction_id, bounty, deadline\]
-		Created(T::AccountId, BalanceOf<T>, T::BlockNumber),
+		Created {
+			auction_id: T::AccountId,
+			bounty: BalanceOf<T>,
+			deadline: T::BlockNumber,
+		},
 	}
 
 	// Errors inform users that something went wrong.
@@ -93,6 +101,9 @@ pub mod pallet {
 		NoneValue,
 
 		DeadlineExpired,
+		MinBountyRequired,
+		MinDepositRequired,
+
 		/// Errors should have helpful documentation associated with them.
 		StorageOverflow,
 	}
@@ -113,6 +124,8 @@ pub mod pallet {
 		) -> DispatchResult {
 			// input checks
 			let employer = ensure_signed(origin)?;
+			ensure!(bounty >= T::MinBounty::get(), Error::<T>::MinBountyRequired);
+			ensure!(deposit >= T::MinDeposit::get(), Error::<T>::MinDepositRequired);
 			ensure!(
 				deadline > frame_system::Pallet::<T>::block_number(),
 				Error::<T>::DeadlineExpired
@@ -120,7 +133,6 @@ pub mod pallet {
 
 			// generate auction id
 			let auction_count = AuctionCount::<T>::get();
-			AuctionCount::<T>::put(auction_count + 1);
 			let auction_id: T::AccountId = PALLET_ID.into_sub_account(auction_count);
 
 			// transfer balances
@@ -142,10 +154,13 @@ pub mod pallet {
 				data,
 				bids: Vec::new(),
 			};
-			Auctions::<T>::insert(&auction_id, auction);
 
-			// broadcast event
-			Self::deposit_event(Event::<T>::Created(auction_id, deposit, deadline));
+            // update storage
+			Auctions::<T>::insert(&auction_id, auction);
+			AuctionCount::<T>::put(auction_count + 1);
+
+			// broadcast event and finalize
+			Self::deposit_event(Event::<T>::Created { auction_id, bounty, deadline });
 			Ok(())
 		}
 
