@@ -16,18 +16,32 @@ pub mod pallet {
 	use frame_support::pallet_prelude::*;
 	use frame_system::pallet_prelude::*;
 
-	use frame_support::traits::Currency;
+	use frame_support::{
+		inherent::Vec,
+		sp_runtime::traits::AccountIdConversion,
+		traits::{Currency, ExistenceRequirement, WithdrawReasons},
+		PalletId,
+	};
+
+	const PALLET_ID: frame_support::PalletId = PalletId(*b"task_auc");
 
 	type BalanceOf<T> =
 		<<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
 
 	#[derive(Encode, Decode, TypeInfo)]
 	#[scale_info(skip_type_params(T))]
+	pub struct Bid<T: Config>(T::AccountId, BalanceOf<T>);
+
+	#[derive(Encode, Decode, TypeInfo)]
+	#[scale_info(skip_type_params(T))]
 	pub struct Auction<T: Config> {
 		pub employer: T::AccountId,
 		pub arbitrator: T::AccountId,
+		pub bounty: BalanceOf<T>,
 		pub deposit: BalanceOf<T>,
 		pub deadline: T::BlockNumber,
+		pub data: Vec<u8>,
+		pub bids: Vec<Bid<T>>,
 	}
 
 	/// Configure the pallet by specifying the parameters and types on which it depends.
@@ -46,11 +60,12 @@ pub mod pallet {
 	// https://docs.substrate.io/v3/runtime/storage
 	#[pallet::storage]
 	#[pallet::getter(fn auction_count)]
-	pub(super) type AuctionCount<T: Config> = StorageValue<_, u32, ValueQuery>;
+	pub(super) type AuctionCount<T: Config> = StorageValue<_, u64, ValueQuery>;
 
 	#[pallet::storage]
 	#[pallet::getter(fn auctions)]
-	pub(super) type Auctions<T: Config> = StorageMap<_, Twox64Concat, u32, Auction<T>, OptionQuery>;
+	pub(super) type Auctions<T: Config> =
+		StorageMap<_, Identity, T::AccountId, Auction<T>, OptionQuery>;
 
 	#[pallet::storage]
 	#[pallet::getter(fn something)]
@@ -66,6 +81,9 @@ pub mod pallet {
 		/// Event documentation should end with an array that provides descriptive names for event
 		/// parameters. [something, who]
 		SomethingStored(u32, T::AccountId),
+
+		/// Auction created. \[auction_id, bounty, deadline\]
+		Created(T::AccountId, BalanceOf<T>, T::BlockNumber),
 	}
 
 	// Errors inform users that something went wrong.
@@ -73,6 +91,8 @@ pub mod pallet {
 	pub enum Error<T> {
 		/// Error names should be descriptive.
 		NoneValue,
+
+		DeadlineExpired,
 		/// Errors should have helpful documentation associated with them.
 		StorageOverflow,
 	}
@@ -82,6 +102,53 @@ pub mod pallet {
 	// Dispatchable functions must be annotated with a weight and must return a DispatchResult.
 	#[pallet::call]
 	impl<T: Config> Pallet<T> {
+		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
+		pub fn create(
+			origin: OriginFor<T>,
+			arbitrator: T::AccountId,
+			bounty: BalanceOf<T>,
+			deposit: BalanceOf<T>,
+			deadline: T::BlockNumber,
+			data: Vec<u8>,
+		) -> DispatchResult {
+			// input checks
+			let employer = ensure_signed(origin)?;
+			ensure!(
+				deadline > frame_system::Pallet::<T>::block_number(),
+				Error::<T>::DeadlineExpired
+			);
+
+			// generate auction id
+			let auction_count = AuctionCount::<T>::get();
+			AuctionCount::<T>::put(auction_count + 1);
+			let auction_id: T::AccountId = PALLET_ID.into_sub_account(auction_count);
+
+			// transfer balances
+			let imbalance = T::Currency::withdraw(
+				&employer,
+				bounty + deposit,
+				WithdrawReasons::TRANSFER,
+				ExistenceRequirement::AllowDeath,
+			)?;
+			T::Currency::resolve_creating(&auction_id, imbalance);
+
+			// create new auction
+			let auction = Auction::<T> {
+				employer,
+				arbitrator,
+				bounty,
+				deposit,
+				deadline,
+				data,
+				bids: Vec::new(),
+			};
+			Auctions::<T>::insert(&auction_id, auction);
+
+			// broadcast event
+			Self::deposit_event(Event::<T>::Created(auction_id, deposit, deadline));
+			Ok(())
+		}
+
 		/// An example dispatchable that takes a singles value as a parameter, writes the value to
 		/// storage and emits an event. This function must be dispatched by a signed extrinsic.
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
@@ -93,7 +160,6 @@ pub mod pallet {
 
 			// Update storage.
 			<Something<T>>::put(something);
-			<AuctionCount<T>>::put(something);
 
 			// Emit an event.
 			Self::deposit_event(Event::SomethingStored(something, who));
