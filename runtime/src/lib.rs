@@ -273,12 +273,17 @@ impl pallet_sudo::Config for Runtime {
 	type Call = Call;
 }
 
-/// Configure the pallet-template in pallets/template.
+parameter_types! {
+	pub const MaxDataSize: u32 = 1024;
+}
+
+/// Configure the task auction pallet.
 impl pallet_task_auction::Config for Runtime {
 	type Event = Event;
 	type Currency = Balances;
 	type MinBounty = ExistentialDeposit;
 	type MinDeposit = ExistentialDeposit;
+	type MaxDataSize = MaxDataSize;
 }
 
 // Create the runtime by composing the FRAME pallets that were previously configured.

@@ -55,6 +55,8 @@ pub mod pallet {
 		type MinBounty: Get<BalanceOf<Self>>;
 		#[pallet::constant] // put the constant in metadata
 		type MinDeposit: Get<BalanceOf<Self>>;
+		#[pallet::constant] // put the constant in metadata
+		type MaxDataSize: Get<u32>;
 	}
 
 	#[pallet::pallet]
@@ -103,6 +105,7 @@ pub mod pallet {
 		DeadlineExpired,
 		MinBountyRequired,
 		MinDepositRequired,
+		MaxDataSizeExceeded,
 
 		/// Errors should have helpful documentation associated with them.
 		StorageOverflow,
@@ -130,6 +133,7 @@ pub mod pallet {
 				deadline > frame_system::Pallet::<T>::block_number(),
 				Error::<T>::DeadlineExpired
 			);
+			ensure!(data.len() as u32 <= T::MaxDataSize::get(), Error::<T>::MaxDataSizeExceeded);
 
 			// generate auction id
 			let auction_count = AuctionCount::<T>::get();
@@ -155,7 +159,7 @@ pub mod pallet {
 				bids: Vec::new(),
 			};
 
-            // update storage
+			// update storage
 			Auctions::<T>::insert(&auction_id, auction);
 			AuctionCount::<T>::put(auction_count + 1);
 

@@ -74,11 +74,16 @@ impl pallet_balances::Config for Test {
 	type WeightInfo = pallet_balances::weights::SubstrateWeight<Test>;
 }
 
+parameter_types! {
+	pub const MaxDataSize: u32 = 1024;
+}
+
 impl pallet_task_auction::Config for Test {
 	type Event = Event;
 	type Currency = Balances;
 	type MinBounty = ExistentialDeposit;
 	type MinDeposit = ExistentialDeposit;
+	type MaxDataSize = MaxDataSize;
 }
 
 // Build genesis storage according to the mock runtime.
