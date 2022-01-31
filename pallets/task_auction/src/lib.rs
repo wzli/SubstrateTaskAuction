@@ -17,7 +17,6 @@ pub mod pallet {
 	use frame_system::pallet_prelude::*;
 
 	use frame_support::{
-		inherent::Vec,
 		sp_runtime::traits::AccountIdConversion,
 		traits::{Currency, ExistenceRequirement, WithdrawReasons},
 		PalletId,
@@ -27,22 +26,6 @@ pub mod pallet {
 
 	type BalanceOf<T> =
 		<<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
-
-	#[derive(Encode, Decode, TypeInfo)]
-	#[scale_info(skip_type_params(T))]
-	pub struct Bid<T: Config>(T::AccountId, BalanceOf<T>);
-
-	#[derive(Encode, Decode, TypeInfo)]
-	#[scale_info(skip_type_params(T))]
-	pub struct Auction<T: Config> {
-		pub employer: T::AccountId,
-		pub arbitrator: T::AccountId,
-		pub bounty: BalanceOf<T>,
-		pub deposit: BalanceOf<T>,
-		pub deadline: T::BlockNumber,
-		pub data: Vec<u8>,
-		pub bids: Vec<Bid<T>>,
-	}
 
 	/// Configure the pallet by specifying the parameters and types on which it depends.
 	#[pallet::config]
@@ -56,7 +39,25 @@ pub mod pallet {
 		#[pallet::constant] // put the constant in metadata
 		type MinDeposit: Get<BalanceOf<Self>>;
 		#[pallet::constant] // put the constant in metadata
+		type MinBidRatio: Get<u32>;
+		#[pallet::constant] // put the constant in metadata
+		type MaxBidCount: Get<u32>;
+		#[pallet::constant] // put the constant in metadata
 		type MaxDataSize: Get<u32>;
+	}
+
+	#[derive(Encode, Decode, TypeInfo, Clone, PartialEq, Debug)]
+	pub struct Bid<AccountId, Balance>(AccountId, Balance);
+
+	#[derive(Encode, Decode, TypeInfo)]
+	#[scale_info(skip_type_params(T))]
+	pub struct Auction<T: Config> {
+		pub employer: T::AccountId,
+		pub arbitrator: T::AccountId,
+		pub bounty: BalanceOf<T>,
+		pub deposit: BalanceOf<T>,
+		pub deadline: T::BlockNumber,
+		pub data: BoundedVec<u8, T::MaxDataSize>,
 	}
 
 	#[pallet::pallet]
@@ -73,6 +74,16 @@ pub mod pallet {
 	#[pallet::getter(fn auctions)]
 	pub(super) type Auctions<T: Config> =
 		StorageMap<_, Identity, T::AccountId, Auction<T>, OptionQuery>;
+
+	#[pallet::storage]
+	#[pallet::getter(fn bids)]
+	pub(super) type Bids<T: Config> = StorageMap<
+		_,
+		Identity,
+		T::AccountId,
+		BoundedVec<Bid<T::AccountId, BalanceOf<T>>, T::MinBidRatio>,
+		ValueQuery,
+	>;
 
 	#[pallet::storage]
 	#[pallet::getter(fn something)]
@@ -94,6 +105,11 @@ pub mod pallet {
 			bounty: BalanceOf<T>,
 			deadline: T::BlockNumber,
 		},
+
+		Bid {
+			auction_id: T::AccountId,
+			bid: Bid<T::AccountId, BalanceOf<T>>,
+		},
 	}
 
 	// Errors inform users that something went wrong.
@@ -105,12 +121,16 @@ pub mod pallet {
 		DeadlineExpired,
 		MinBountyRequired,
 		MinDepositRequired,
-		MaxDataSizeExceeded,
+		MinBidRatioRequired,
+		MaxBidCountExceeded,
+		AuctionIdNotFound,
+
+		BidderIsEmployer,
+		BidderIsArbitrator,
 
 		/// Errors should have helpful documentation associated with them.
 		StorageOverflow,
 	}
-
 	// Dispatchable functions allows users to interact with the pallet and invoke state changes.
 	// These functions materialize as "extrinsics", which are often compared to transactions.
 	// Dispatchable functions must be annotated with a weight and must return a DispatchResult.
@@ -123,7 +143,7 @@ pub mod pallet {
 			bounty: BalanceOf<T>,
 			deposit: BalanceOf<T>,
 			deadline: T::BlockNumber,
-			data: Vec<u8>,
+			data: BoundedVec<u8, T::MaxDataSize>,
 		) -> DispatchResult {
 			// input checks
 			let employer = ensure_signed(origin)?;
@@ -133,7 +153,6 @@ pub mod pallet {
 				deadline > frame_system::Pallet::<T>::block_number(),
 				Error::<T>::DeadlineExpired
 			);
-			ensure!(data.len() as u32 <= T::MaxDataSize::get(), Error::<T>::MaxDataSizeExceeded);
 
 			// generate auction id
 			let auction_count = AuctionCount::<T>::get();
@@ -144,20 +163,12 @@ pub mod pallet {
 				&employer,
 				bounty + deposit,
 				WithdrawReasons::TRANSFER,
-				ExistenceRequirement::AllowDeath,
+				ExistenceRequirement::KeepAlive,
 			)?;
 			T::Currency::resolve_creating(&auction_id, imbalance);
 
 			// create new auction
-			let auction = Auction::<T> {
-				employer,
-				arbitrator,
-				bounty,
-				deposit,
-				deadline,
-				data,
-				bids: Vec::new(),
-			};
+			let auction = Auction::<T> { employer, arbitrator, bounty, deposit, deadline, data };
 
 			// update storage
 			Auctions::<T>::insert(&auction_id, auction);
@@ -165,6 +176,41 @@ pub mod pallet {
 
 			// broadcast event and finalize
 			Self::deposit_event(Event::<T>::Created { auction_id, bounty, deadline });
+			Ok(())
+		}
+
+		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
+		pub fn bid(
+			origin: OriginFor<T>,
+			auction_id: T::AccountId,
+			price: BalanceOf<T>,
+		) -> DispatchResult {
+			let bidder = ensure_signed(origin)?;
+			let auction = Auctions::<T>::get(&auction_id).ok_or(Error::<T>::AuctionIdNotFound)?;
+			ensure!(
+				auction.deadline >= frame_system::Pallet::<T>::block_number(),
+				Error::<T>::DeadlineExpired
+			);
+			ensure!(bidder != auction.employer, Error::<T>::BidderIsEmployer);
+			ensure!(bidder != auction.arbitrator, Error::<T>::BidderIsArbitrator);
+
+			let mut bids = Bids::<T>::get(&auction_id);
+			let deposit_dst = if let Some(Bid(prev_bidder, prev_price)) = bids.last() {
+				ensure!(prev_price > &price, Error::<T>::MinBidRatioRequired);
+				prev_bidder
+			} else {
+				&auction_id
+			}
+			.clone();
+			let bid = Bid(bidder.clone(), price);
+			bids.try_push(bid.clone()).map_err(|_| Error::<T>::MaxBidCountExceeded)?;
+			T::Currency::transfer(
+				&bidder,
+				&deposit_dst,
+				auction.deposit,
+				ExistenceRequirement::KeepAlive,
+			)?;
+			Self::deposit_event(Event::<T>::Bid { auction_id, bid });
 			Ok(())
 		}
 
