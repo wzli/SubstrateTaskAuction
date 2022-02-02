@@ -47,7 +47,7 @@ pub mod pallet {
 	}
 
 	#[derive(Encode, Decode, TypeInfo, Clone, PartialEq, Debug)]
-	pub struct Bid<AccountId, Balance>(AccountId, Balance);
+	pub struct Bid<AccountId, Balance>(pub AccountId, pub Balance);
 
 	#[derive(Encode, Decode, TypeInfo)]
 	#[scale_info(skip_type_params(T))]
@@ -81,7 +81,7 @@ pub mod pallet {
 		_,
 		Identity,
 		T::AccountId,
-		BoundedVec<Bid<T::AccountId, BalanceOf<T>>, T::MinBidRatio>,
+		BoundedVec<Bid<T::AccountId, BalanceOf<T>>, T::MaxBidCount>,
 		ValueQuery,
 	>;
 
@@ -196,7 +196,7 @@ pub mod pallet {
 
 			let mut bids = Bids::<T>::get(&auction_id);
 			let deposit_dst = if let Some(Bid(prev_bidder, prev_price)) = bids.last() {
-				ensure!(prev_price > &price, Error::<T>::MinBidRatioRequired);
+				ensure!(*prev_price > price, Error::<T>::MinBidRatioRequired);
 				prev_bidder
 			} else {
 				&auction_id
@@ -204,6 +204,7 @@ pub mod pallet {
 			.clone();
 			let bid = Bid(bidder.clone(), price);
 			bids.try_push(bid.clone()).map_err(|_| Error::<T>::MaxBidCountExceeded)?;
+			Bids::<T>::insert(&auction_id, bids);
 			T::Currency::transfer(
 				&bidder,
 				&deposit_dst,

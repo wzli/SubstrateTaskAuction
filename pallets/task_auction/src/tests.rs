@@ -66,6 +66,7 @@ fn create() {
 			assert_eq!(bounty, 1000);
 			assert_eq!(deadline, 5);
 			assert_eq!(Balances::free_balance(&auction_id), 1500);
+			assert_eq!(Balances::free_balance(&0xA), 10000 - 1500);
 
 			let auction = TaskAuction::auctions(auction_id).unwrap();
 			assert_eq!(auction.employer, 0xA);
@@ -77,6 +78,63 @@ fn create() {
 			assert!(TaskAuction::bids(auction_id).is_empty());
 		} else {
 			panic!("wrong event type")
+		}
+	})
+}
+
+#[test]
+fn bid() {
+	new_test_ext().execute_with(|| {
+		let test_data: BoundedVec<u8, <Test as crate::Config>::MaxDataSize> =
+			vec![1, 2, 3].try_into().unwrap();
+		assert_err!(
+			TaskAuction::bid(Origin::signed(0xA), 100, 100),
+			Error::<Test>::AuctionIdNotFound
+		);
+		assert_ok!(TaskAuction::create(Origin::signed(0xA), 0xB, 1000, 500, 5, test_data));
+		if let Event::TaskAuction(crate::Event::<Test>::Created {
+			auction_id,
+			bounty: _,
+			deadline: _,
+		}) = last_event()
+		{
+			System::set_block_number(6);
+			assert_err!(
+				TaskAuction::bid(Origin::signed(0xC), auction_id, 100),
+				Error::<Test>::DeadlineExpired
+			);
+			System::set_block_number(1);
+			assert_err!(
+				TaskAuction::bid(Origin::signed(0xA), auction_id, 100),
+				Error::<Test>::BidderIsEmployer
+			);
+			assert_err!(
+				TaskAuction::bid(Origin::signed(0xB), auction_id, 100),
+				Error::<Test>::BidderIsArbitrator
+			);
+
+			assert!(TaskAuction::bids(auction_id).is_empty());
+			assert_ok!(TaskAuction::bid(Origin::signed(0xC), auction_id, 200));
+			assert_eq!(Balances::free_balance(&auction_id), 2000);
+			assert_eq!(Balances::free_balance(&0xC), 10000 - 500);
+			assert_eq!(TaskAuction::bids(auction_id).len(), 1);
+
+			assert_err!(
+				TaskAuction::bid(Origin::signed(0xD), auction_id, 300),
+				Error::<Test>::MinBidRatioRequired
+			);
+			assert_eq!(TaskAuction::bids(auction_id).len(), 1);
+
+			for i in 1..<Test as crate::Config>::MaxBidCount::get() {
+				let price: u128 = (200 - i).into();
+				assert_ok!(TaskAuction::bid(Origin::signed(0xD), auction_id, price));
+				assert_eq!(TaskAuction::bids(auction_id).last().unwrap().1, price);
+				assert_eq!(TaskAuction::bids(auction_id).len(), (1 + i) as usize);
+			}
+			assert_err!(
+				TaskAuction::bid(Origin::signed(0xD), auction_id, 10),
+				Error::<Test>::MaxBidCountExceeded
+			);
 		}
 	})
 }
