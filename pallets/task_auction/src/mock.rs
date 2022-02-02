@@ -75,14 +75,19 @@ impl pallet_balances::Config for Test {
 }
 
 parameter_types! {
+	pub const MinBidRatio: u8 = 50;
+	pub const MaxBidCount: u32 = 128;
 	pub const MaxDataSize: u32 = 1024;
 }
 
+/// Configure the task auction pallet.
 impl pallet_task_auction::Config for Test {
 	type Event = Event;
 	type Currency = Balances;
 	type MinBounty = ExistentialDeposit;
 	type MinDeposit = ExistentialDeposit;
+	type MinBidRatio = MinBidRatio;
+	type MaxBidCount = MaxBidCount;
 	type MaxDataSize = MaxDataSize;
 }
 
