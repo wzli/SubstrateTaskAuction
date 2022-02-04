@@ -43,8 +43,9 @@ pub mod pallet {
 		type MaxDataSize: Get<u32>;
 	}
 
-	#[derive(Encode, Decode, TypeInfo, Clone, PartialEq, Debug)]
-	pub struct Bid<AccountId, Balance>(pub AccountId, pub Balance);
+	#[derive(Encode, Decode, TypeInfo, Clone, PartialEq)]
+	#[scale_info(skip_type_params(T))]
+	pub struct Bid<T: Config>(pub T::AccountId, pub BalanceOf<T>);
 
 	#[derive(Encode, Decode, TypeInfo)]
 	#[scale_info(skip_type_params(T))]
@@ -57,10 +58,6 @@ pub mod pallet {
 		pub data: BoundedVec<u8, T::MaxDataSize>,
 	}
 
-	#[pallet::pallet]
-	#[pallet::generate_store(pub(super) trait Store)]
-	pub struct Pallet<T>(_);
-
 	// The pallet's runtime storage items.
 	// https://docs.substrate.io/v3/runtime/storage
 	#[pallet::storage]
@@ -69,47 +66,22 @@ pub mod pallet {
 
 	#[pallet::storage]
 	#[pallet::getter(fn bids)]
-	pub(super) type Bids<T: Config> = StorageMap<
-		_,
-		Identity,
-		T::Hash,
-		BoundedVec<Bid<T::AccountId, BalanceOf<T>>, T::MaxBidCount>,
-		ValueQuery,
-	>;
-
-	#[pallet::storage]
-	#[pallet::getter(fn something)]
-	// Learn more about declaring storage items:
-	// https://docs.substrate.io/v3/runtime/storage#declaring-storage-items
-	pub(super) type Something<T> = StorageValue<_, u32>;
+	pub(super) type Bids<T: Config> =
+		StorageMap<_, Identity, T::Hash, BoundedVec<Bid<T>, T::MaxBidCount>, ValueQuery>;
 
 	// Pallets use events to inform users when important changes are made.
 	// https://docs.substrate.io/v3/runtime/events-and-errors
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
 	pub enum Event<T: Config> {
-		/// Event documentation should end with an array that provides descriptive names for event
-		/// parameters. [something, who]
-		SomethingStored(u32, T::AccountId),
+		Created { auction_id: T::Hash, bounty: BalanceOf<T>, deadline: T::BlockNumber },
 
-		Created {
-			auction_id: T::Hash,
-			bounty: BalanceOf<T>,
-			deadline: T::BlockNumber,
-		},
-
-		Bid {
-			auction_id: T::Hash,
-			bid: Bid<T::AccountId, BalanceOf<T>>,
-		},
+		Bid { auction_id: T::Hash, bidder: T::AccountId, price: BalanceOf<T> },
 	}
 
 	// Errors inform users that something went wrong.
 	#[pallet::error]
 	pub enum Error<T> {
-		/// Error names should be descriptive.
-		NoneValue,
-
 		DeadlineExpired,
 		MinBountyRequired,
 		MinDepositRequired,
@@ -119,9 +91,6 @@ pub mod pallet {
 
 		BidderIsEmployer,
 		BidderIsArbitrator,
-
-		/// Errors should have helpful documentation associated with them.
-		StorageOverflow,
 	}
 	// Dispatchable functions allows users to interact with the pallet and invoke state changes.
 	// These functions materialize as "extrinsics", which are often compared to transactions.
@@ -161,7 +130,7 @@ pub mod pallet {
 			Ok(())
 		}
 
-		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
+		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,1))]
 		pub fn bid(
 			origin: OriginFor<T>,
 			auction_id: T::Hash,
@@ -181,8 +150,8 @@ pub mod pallet {
 			let prev_bid = bids.last().map(|x| x.clone());
 
 			// check if new bid can be inserted
-			let bid = Bid(bidder, price);
-			bids.try_push(bid.clone()).map_err(|_| Error::<T>::MaxBidCountExceeded)?;
+			bids.try_push(Bid(bidder.clone(), price))
+				.map_err(|_| Error::<T>::MaxBidCountExceeded)?;
 
 			// if there is a previous bid, ensure new bid is lower,
 			// then unreserve deposit of previous bidder
@@ -191,48 +160,15 @@ pub mod pallet {
 				T::Currency::unreserve(&prev_bidder, auction.deposit);
 			}
 			// all checks pass, reserve deposit and insert bid
-			T::Currency::reserve(&bid.0, auction.deposit)?;
+			T::Currency::reserve(&bidder, auction.deposit)?;
 			Bids::<T>::insert(&auction_id, bids);
 
-			Self::deposit_event(Event::<T>::Bid { auction_id, bid });
+			Self::deposit_event(Event::<T>::Bid { auction_id, bidder, price });
 			Ok(())
-		}
-
-		/// An example dispatchable that takes a singles value as a parameter, writes the value to
-		/// storage and emits an event. This function must be dispatched by a signed extrinsic.
-		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
-		pub fn do_something(origin: OriginFor<T>, something: u32) -> DispatchResult {
-			// Check that the extrinsic was signed and get the signer.
-			// This function will return an error if the extrinsic is not signed.
-			// https://docs.substrate.io/v3/runtime/origins
-			let who = ensure_signed(origin)?;
-
-			// Update storage.
-			<Something<T>>::put(something);
-
-			// Emit an event.
-			Self::deposit_event(Event::SomethingStored(something, who));
-			// Return a successful DispatchResultWithPostInfo
-			Ok(())
-		}
-
-		/// An example dispatchable that may throw a custom error.
-		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,1))]
-		pub fn cause_error(origin: OriginFor<T>) -> DispatchResult {
-			let _who = ensure_signed(origin)?;
-
-			// Read a value from storage.
-			match <Something<T>>::get() {
-				// Return an error if the value has not been set.
-				None => Err(Error::<T>::NoneValue)?,
-				Some(old) => {
-					// Increment the value read from storage; will error in the event of overflow.
-					let new = old.checked_add(1).ok_or(Error::<T>::StorageOverflow)?;
-					// Update the value in storage with the incremented result.
-					<Something<T>>::put(new);
-					Ok(())
-				},
-			}
 		}
 	}
+
+	#[pallet::pallet]
+	#[pallet::generate_store(pub(super) trait Store)]
+	pub struct Pallet<T>(_);
 }

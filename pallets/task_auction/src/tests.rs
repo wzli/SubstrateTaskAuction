@@ -6,31 +6,6 @@ fn last_event() -> Event {
 }
 
 #[test]
-fn it_works_for_default_value() {
-	new_test_ext().execute_with(|| {
-		// Dispatch a signed extrinsic.
-		assert_ok!(TaskAuction::do_something(Origin::signed(1), 42));
-		// Read pallet storage and assert an expected result.
-		assert_eq!(TaskAuction::something(), Some(42));
-	});
-}
-
-#[test]
-fn correct_error_for_none_value() {
-	new_test_ext().execute_with(|| {
-		// Ensure the expected error is thrown when no value is present.
-		assert_noop!(TaskAuction::cause_error(Origin::signed(1)), Error::<Test>::NoneValue);
-	});
-}
-
-#[test]
-fn new_test_ext_behaves() {
-	new_test_ext().execute_with(|| {
-		assert_eq!(Balances::free_balance(&0xA), 10000);
-	})
-}
-
-#[test]
 fn create() {
 	new_test_ext().execute_with(|| {
 		let test_data: BoundedVec<u8, <Test as crate::Config>::MaxDataSize> =
