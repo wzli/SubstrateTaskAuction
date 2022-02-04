@@ -65,8 +65,7 @@ fn create() {
 		{
 			assert_eq!(bounty, 1000);
 			assert_eq!(deadline, 5);
-			assert_eq!(Balances::free_balance(&auction_id), 1500);
-			assert_eq!(Balances::free_balance(&0xA), 10000 - 1500);
+			assert_eq!(Balances::reserved_balance(&0xA), 1500);
 
 			let auction = TaskAuction::auctions(auction_id).unwrap();
 			assert_eq!(auction.employer, 0xA);
@@ -115,8 +114,7 @@ fn bid() {
 
 			assert!(TaskAuction::bids(auction_id).is_empty());
 			assert_ok!(TaskAuction::bid(Origin::signed(0xC), auction_id, 200));
-			assert_eq!(Balances::free_balance(&auction_id), 2000);
-			assert_eq!(Balances::free_balance(&0xC), 10000 - 500);
+			assert_eq!(Balances::reserved_balance(&0xC), 500);
 			assert_eq!(TaskAuction::bids(auction_id).len(), 1);
 
 			assert_err!(

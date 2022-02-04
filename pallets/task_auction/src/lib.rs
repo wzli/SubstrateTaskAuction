@@ -18,7 +18,7 @@ pub mod pallet {
 
 	use frame_support::{
 		sp_runtime::traits::AccountIdConversion,
-		traits::{Currency, ExistenceRequirement, WithdrawReasons},
+		traits::{Currency, ExistenceRequirement, ReservableCurrency, WithdrawReasons},
 		PalletId,
 	};
 
@@ -32,7 +32,7 @@ pub mod pallet {
 	pub trait Config: frame_system::Config {
 		/// Because this pallet emits events, it depends on the runtime's definition of an event.
 		type Event: From<Event<Self>> + IsType<<Self as frame_system::Config>::Event>;
-		type Currency: Currency<Self::AccountId>;
+		type Currency: ReservableCurrency<Self::AccountId>;
 
 		#[pallet::constant] // put the constant in metadata
 		type MinBounty: Get<BalanceOf<Self>>;
@@ -158,14 +158,8 @@ pub mod pallet {
 			let auction_count = AuctionCount::<T>::get();
 			let auction_id: T::AccountId = PALLET_ID.into_sub_account(auction_count);
 
-			// transfer balances
-			let imbalance = T::Currency::withdraw(
-				&employer,
-				bounty + deposit,
-				WithdrawReasons::TRANSFER,
-				ExistenceRequirement::KeepAlive,
-			)?;
-			T::Currency::resolve_creating(&auction_id, imbalance);
+			// reserve balance for bounty and deposit
+			T::Currency::reserve(&employer, bounty + deposit)?;
 
 			// create new auction
 			let auction = Auction::<T> { employer, arbitrator, bounty, deposit, deadline, data };
@@ -174,7 +168,6 @@ pub mod pallet {
 			Auctions::<T>::insert(&auction_id, auction);
 			AuctionCount::<T>::put(auction_count + 1);
 
-			// broadcast event and finalize
 			Self::deposit_event(Event::<T>::Created { auction_id, bounty, deadline });
 			Ok(())
 		}
@@ -185,6 +178,7 @@ pub mod pallet {
 			auction_id: T::AccountId,
 			price: BalanceOf<T>,
 		) -> DispatchResult {
+			// input checks
 			let bidder = ensure_signed(origin)?;
 			let auction = Auctions::<T>::get(&auction_id).ok_or(Error::<T>::AuctionIdNotFound)?;
 			ensure!(
@@ -193,24 +187,24 @@ pub mod pallet {
 			);
 			ensure!(bidder != auction.employer, Error::<T>::BidderIsEmployer);
 			ensure!(bidder != auction.arbitrator, Error::<T>::BidderIsArbitrator);
-
+			// fetch existing bids vector
 			let mut bids = Bids::<T>::get(&auction_id);
-			let deposit_dst = if let Some(Bid(prev_bidder, prev_price)) = bids.last() {
-				ensure!(*prev_price > price, Error::<T>::MinBidRatioRequired);
-				prev_bidder
-			} else {
-				&auction_id
-			}
-			.clone();
-			let bid = Bid(bidder.clone(), price);
+			let prev_bid = bids.last().map(|x| x.clone());
+
+			// check if new bid can be inserted
+			let bid = Bid(bidder, price);
 			bids.try_push(bid.clone()).map_err(|_| Error::<T>::MaxBidCountExceeded)?;
+
+			// if there is a previous bid, ensure new bid is lower,
+			// then unreserve deposit of previous bidder
+			if let Some(Bid(prev_bidder, prev_price)) = prev_bid {
+				ensure!(prev_price > price, Error::<T>::MinBidRatioRequired);
+				T::Currency::unreserve(&prev_bidder, auction.deposit);
+			}
+			// all checks pass, reserve deposit and insert bid
+			T::Currency::reserve(&bid.0, auction.deposit)?;
 			Bids::<T>::insert(&auction_id, bids);
-			T::Currency::transfer(
-				&bidder,
-				&deposit_dst,
-				auction.deposit,
-				ExistenceRequirement::KeepAlive,
-			)?;
+
 			Self::deposit_event(Event::<T>::Bid { auction_id, bid });
 			Ok(())
 		}
