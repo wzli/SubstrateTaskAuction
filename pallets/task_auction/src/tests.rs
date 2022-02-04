@@ -1,5 +1,5 @@
 use crate::{mock::*, Error};
-use frame_support::{assert_err, assert_noop, assert_ok, BoundedVec};
+use frame_support::{assert_err, assert_ok, BoundedVec};
 
 fn last_event() -> Event {
 	System::events().pop().expect("Event expected").event
@@ -47,7 +47,7 @@ fn create() {
 			assert_eq!(auction.deposit, 500);
 			assert_eq!(auction.deadline, 5);
 			assert_eq!(auction.data, vec![1, 2, 3]);
-			assert!(TaskAuction::bids(auction_id).is_empty());
+			assert!(TaskAuction::bids(auction_id, 0).is_none());
 		} else {
 			panic!("wrong event type")
 		}
@@ -85,27 +85,22 @@ fn bid() {
 				Error::<Test>::BidderIsArbitrator
 			);
 
-			assert!(TaskAuction::bids(auction_id).is_empty());
+			assert!(TaskAuction::bids(auction_id, 0).is_none());
 			assert_ok!(TaskAuction::bid(Origin::signed(0xC), auction_id, 200));
 			assert_eq!(Balances::reserved_balance(&0xC), 500);
-			assert_eq!(TaskAuction::bids(auction_id).len(), 1);
+			assert!(TaskAuction::bids(auction_id, 0).is_some());
 
 			assert_err!(
 				TaskAuction::bid(Origin::signed(0xD), auction_id, 300),
 				Error::<Test>::MinBidRatioRequired
 			);
-			assert_eq!(TaskAuction::bids(auction_id).len(), 1);
+			assert!(TaskAuction::bids(auction_id, 0).is_some());
 
-			for i in 1..<Test as crate::Config>::MaxBidCount::get() {
-				let price: u128 = (200 - i).into();
+			for i in 1..10 {
+				let price = (200 - i) as u128;
 				assert_ok!(TaskAuction::bid(Origin::signed(0xD), auction_id, price));
-				assert_eq!(TaskAuction::bids(auction_id).last().unwrap().1, price);
-				assert_eq!(TaskAuction::bids(auction_id).len(), (1 + i) as usize);
+				assert_eq!(TaskAuction::bids(auction_id, 0).unwrap().1, price);
 			}
-			assert_err!(
-				TaskAuction::bid(Origin::signed(0xD), auction_id, 10),
-				Error::<Test>::MaxBidCountExceeded
-			);
 		}
 	})
 }

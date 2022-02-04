@@ -38,12 +38,10 @@ pub mod pallet {
 		#[pallet::constant] // put the constant in metadata
 		type MinBidRatio: Get<u32>;
 		#[pallet::constant] // put the constant in metadata
-		type MaxBidCount: Get<u32>;
-		#[pallet::constant] // put the constant in metadata
 		type MaxDataSize: Get<u32>;
 	}
 
-	#[derive(Encode, Decode, TypeInfo, Clone, PartialEq)]
+	#[derive(Encode, Decode, TypeInfo)]
 	#[scale_info(skip_type_params(T))]
 	pub struct Bid<T: Config>(pub T::AccountId, pub BalanceOf<T>);
 
@@ -67,7 +65,7 @@ pub mod pallet {
 	#[pallet::storage]
 	#[pallet::getter(fn bids)]
 	pub(super) type Bids<T: Config> =
-		StorageMap<_, Identity, T::Hash, BoundedVec<Bid<T>, T::MaxBidCount>, ValueQuery>;
+		StorageDoubleMap<_, Identity, T::Hash, Identity, T::AccountId, Bid<T>, OptionQuery>;
 
 	// Pallets use events to inform users when important changes are made.
 	// https://docs.substrate.io/v3/runtime/events-and-errors
@@ -75,7 +73,6 @@ pub mod pallet {
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
 	pub enum Event<T: Config> {
 		Created { auction_id: T::Hash, bounty: BalanceOf<T>, deadline: T::BlockNumber },
-
 		Bid { auction_id: T::Hash, bidder: T::AccountId, price: BalanceOf<T> },
 	}
 
@@ -86,7 +83,6 @@ pub mod pallet {
 		MinBountyRequired,
 		MinDepositRequired,
 		MinBidRatioRequired,
-		MaxBidCountExceeded,
 		AuctionIdNotFound,
 
 		BidderIsEmployer,
@@ -145,23 +141,21 @@ pub mod pallet {
 			);
 			ensure!(bidder != auction.employer, Error::<T>::BidderIsEmployer);
 			ensure!(bidder != auction.arbitrator, Error::<T>::BidderIsArbitrator);
-			// fetch existing bids vector
-			let mut bids = Bids::<T>::get(&auction_id);
-			let prev_bid = bids.last().map(|x| x.clone());
-
-			// check if new bid can be inserted
-			bids.try_push(Bid(bidder.clone(), price))
-				.map_err(|_| Error::<T>::MaxBidCountExceeded)?;
 
 			// if there is a previous bid, ensure new bid is lower,
 			// then unreserve deposit of previous bidder
-			if let Some(Bid(prev_bidder, prev_price)) = prev_bid {
+			let prev_bid = Bids::<T>::get(&auction_id, T::AccountId::default());
+			let prev_bidder = if let Some(Bid(prev_bidder, prev_price)) = prev_bid {
 				ensure!(prev_price > price, Error::<T>::MinBidRatioRequired);
 				T::Currency::unreserve(&prev_bidder, auction.deposit);
-			}
+				prev_bidder
+			} else {
+				T::AccountId::default()
+			};
 			// all checks pass, reserve deposit and insert bid
 			T::Currency::reserve(&bidder, auction.deposit)?;
-			Bids::<T>::insert(&auction_id, bids);
+			Bids::<T>::insert(&auction_id, &bidder, Bid(prev_bidder, price));
+			Bids::<T>::insert(&auction_id, T::AccountId::default(), Bid(bidder.clone(), price));
 
 			Self::deposit_event(Event::<T>::Bid { auction_id, bidder, price });
 			Ok(())
