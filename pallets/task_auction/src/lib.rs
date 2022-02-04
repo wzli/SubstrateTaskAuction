@@ -17,12 +17,9 @@ pub mod pallet {
 	use frame_system::pallet_prelude::*;
 
 	use frame_support::{
-		sp_runtime::traits::AccountIdConversion,
+		sp_runtime::traits::Hash,
 		traits::{Currency, ExistenceRequirement, ReservableCurrency, WithdrawReasons},
-		PalletId,
 	};
-
-	const PALLET_ID: frame_support::PalletId = PalletId(*b"task_auc");
 
 	type BalanceOf<T> =
 		<<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
@@ -67,20 +64,15 @@ pub mod pallet {
 	// The pallet's runtime storage items.
 	// https://docs.substrate.io/v3/runtime/storage
 	#[pallet::storage]
-	#[pallet::getter(fn auction_count)]
-	pub(super) type AuctionCount<T: Config> = StorageValue<_, u64, ValueQuery>;
-
-	#[pallet::storage]
 	#[pallet::getter(fn auctions)]
-	pub(super) type Auctions<T: Config> =
-		StorageMap<_, Identity, T::AccountId, Auction<T>, OptionQuery>;
+	pub(super) type Auctions<T: Config> = StorageMap<_, Identity, T::Hash, Auction<T>, OptionQuery>;
 
 	#[pallet::storage]
 	#[pallet::getter(fn bids)]
 	pub(super) type Bids<T: Config> = StorageMap<
 		_,
 		Identity,
-		T::AccountId,
+		T::Hash,
 		BoundedVec<Bid<T::AccountId, BalanceOf<T>>, T::MaxBidCount>,
 		ValueQuery,
 	>;
@@ -101,13 +93,13 @@ pub mod pallet {
 		SomethingStored(u32, T::AccountId),
 
 		Created {
-			auction_id: T::AccountId,
+			auction_id: T::Hash,
 			bounty: BalanceOf<T>,
 			deadline: T::BlockNumber,
 		},
 
 		Bid {
-			auction_id: T::AccountId,
+			auction_id: T::Hash,
 			bid: Bid<T::AccountId, BalanceOf<T>>,
 		},
 	}
@@ -154,19 +146,16 @@ pub mod pallet {
 				Error::<T>::DeadlineExpired
 			);
 
-			// generate auction id
-			let auction_count = AuctionCount::<T>::get();
-			let auction_id: T::AccountId = PALLET_ID.into_sub_account(auction_count);
-
 			// reserve balance for bounty and deposit
 			T::Currency::reserve(&employer, bounty + deposit)?;
 
-			// create new auction
-			let auction = Auction::<T> { employer, arbitrator, bounty, deposit, deadline, data };
+			// generate auction id
+			let nonce = frame_system::Pallet::<T>::account_nonce(&employer);
+			let auction_id = T::Hashing::hash_of(&(employer.clone(), nonce));
 
-			// update storage
+			// create and insert new auction
+			let auction = Auction::<T> { employer, arbitrator, bounty, deposit, deadline, data };
 			Auctions::<T>::insert(&auction_id, auction);
-			AuctionCount::<T>::put(auction_count + 1);
 
 			Self::deposit_event(Event::<T>::Created { auction_id, bounty, deadline });
 			Ok(())
@@ -175,7 +164,7 @@ pub mod pallet {
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
 		pub fn bid(
 			origin: OriginFor<T>,
-			auction_id: T::AccountId,
+			auction_id: T::Hash,
 			price: BalanceOf<T>,
 		) -> DispatchResult {
 			// input checks

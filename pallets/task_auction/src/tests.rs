@@ -55,11 +55,9 @@ fn create() {
 			TaskAuction::create(Origin::signed(0xA), 0xB, 500, 20000, 5, test_data.clone()),
 			pallet_balances::Error::<Test>::InsufficientBalance
 		);
-		assert_eq!(TaskAuction::auction_count(), 0);
 
 		// check successful creation
 		assert_ok!(TaskAuction::create(Origin::signed(0xA), 0xB, 1000, 500, 5, test_data.clone()));
-		assert_eq!(TaskAuction::auction_count(), 1);
 		if let Event::TaskAuction(crate::Event::<Test>::Created { auction_id, bounty, deadline }) =
 			last_event()
 		{
@@ -87,7 +85,7 @@ fn bid() {
 		let test_data: BoundedVec<u8, <Test as crate::Config>::MaxDataSize> =
 			vec![1, 2, 3].try_into().unwrap();
 		assert_err!(
-			TaskAuction::bid(Origin::signed(0xA), 100, 100),
+			TaskAuction::bid(Origin::signed(0xA), [1; 32].into(), 100),
 			Error::<Test>::AuctionIdNotFound
 		);
 		assert_ok!(TaskAuction::create(Origin::signed(0xA), 0xB, 1000, 500, 5, test_data));
