@@ -42,14 +42,39 @@ pub mod pallet {
 		type MaxDataSize: Get<u32>;
 	}
 
+	// Errors inform users that something went wrong.
+	#[pallet::error]
+	pub enum Error<T> {
+		AuctionIdNotFound,
+		AuctionClosed,
+
+		MinBountyRequired,
+		MinDepositRequired,
+		MinBidRatioRequired,
+
+		OwnerRequired,
+		OwnerProhibited,
+		ArbitratorProhibited,
+	}
+
+	// Pallets use events to inform users when important changes are made.
+	// https://docs.substrate.io/v3/runtime/events-and-errors
+	#[pallet::event]
+	#[pallet::generate_deposit(pub(super) fn deposit_event)]
+	pub enum Event<T: Config> {
+		Created { auction_key: Key<T>, bounty: BalanceOf<T>, terminal_block: T::BlockNumber },
+		Extended { auction_key: Key<T>, bounty: BalanceOf<T>, terminal_block: T::BlockNumber },
+		Bid { auction_key: Key<T>, bid_key: Key<T>, price: BalanceOf<T> },
+	}
+
 	#[derive(Encode, Decode, TypeInfo)]
 	#[scale_info(skip_type_params(T))]
 	pub struct Auction<T: Config> {
 		pub arbitrator: T::AccountId,
 		pub bounty: BalanceOf<T>,
 		pub deposit: BalanceOf<T>,
-		pub opening_block: T::BlockNumber,
-		pub closing_block: T::BlockNumber,
+		pub initial_block: T::BlockNumber,
+		pub terminal_block: T::BlockNumber,
 		pub data: BoundedVec<u8, T::MaxDataSize>,
 	}
 
@@ -72,27 +97,6 @@ pub mod pallet {
 		OptionQuery,
 	>;
 
-	// Pallets use events to inform users when important changes are made.
-	// https://docs.substrate.io/v3/runtime/events-and-errors
-	#[pallet::event]
-	#[pallet::generate_deposit(pub(super) fn deposit_event)]
-	pub enum Event<T: Config> {
-		Created { auction_key: Key<T>, bounty: BalanceOf<T>, closing_block: T::BlockNumber },
-		Bid { auction_key: Key<T>, bid_key: Key<T>, price: BalanceOf<T> },
-	}
-
-	// Errors inform users that something went wrong.
-	#[pallet::error]
-	pub enum Error<T> {
-		AuctionClosed,
-		MinBountyRequired,
-		MinDepositRequired,
-		MinBidRatioRequired,
-		AuctionIdNotFound,
-
-		BidderIsEmployer,
-		BidderIsArbitrator,
-	}
 	// Dispatchable functions allows users to interact with the pallet and invoke state changes.
 	// These functions materialize as "extrinsics", which are often compared to transactions.
 	// Dispatchable functions must be annotated with a weight and must return a DispatchResult.
@@ -104,29 +108,53 @@ pub mod pallet {
 			arbitrator: T::AccountId,
 			bounty: BalanceOf<T>,
 			deposit: BalanceOf<T>,
-			closing_block: T::BlockNumber,
+			terminal_block: T::BlockNumber,
 			data: BoundedVec<u8, T::MaxDataSize>,
 		) -> DispatchResult {
 			// input checks
-			let employer = ensure_signed(origin)?;
-			let opening_block = frame_system::Pallet::<T>::block_number();
-			ensure!(opening_block < closing_block, Error::<T>::AuctionClosed);
+			let owner = ensure_signed(origin)?;
+			let initial_block = frame_system::Pallet::<T>::block_number();
 			ensure!(bounty >= T::MinBounty::get(), Error::<T>::MinBountyRequired);
 			ensure!(deposit >= T::MinDeposit::get(), Error::<T>::MinDepositRequired);
 
 			// reserve balance for bounty and deposit
-			T::Currency::reserve(&employer, bounty + deposit)?;
+			T::Currency::reserve(&owner, bounty + deposit)?;
 
 			// generate auction key
-			let nonce = frame_system::Pallet::<T>::account_nonce(&employer);
-			let auction_key = (employer, nonce);
+			let nonce = frame_system::Pallet::<T>::account_nonce(&owner);
+			let auction_key = (owner, nonce);
 
 			// create and insert new auction
 			let auction =
-				Auction::<T> { arbitrator, bounty, deposit, opening_block, closing_block, data };
+				Auction::<T> { arbitrator, bounty, deposit, initial_block, terminal_block, data };
 			Auctions::<T>::insert(&auction_key, auction);
 
-			Self::deposit_event(Event::<T>::Created { auction_key, bounty, closing_block });
+			Self::deposit_event(Event::<T>::Created { auction_key, bounty, terminal_block });
+			Ok(())
+		}
+
+		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,1))]
+		pub fn extend(
+			origin: OriginFor<T>,
+			auction_key: Key<T>,
+			bounty: BalanceOf<T>,
+			terminal_block: T::BlockNumber,
+		) -> DispatchResult {
+			// only owner of auction can extend
+			let owner = ensure_signed(origin)?;
+			ensure!(owner == auction_key.0, Error::<T>::OwnerRequired);
+			// ensure auction is still open
+			let auction = Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionIdNotFound)?;
+			if let Some((_, price)) = Bids::<T>::get(&auction_key, Key::<T>::default()) {
+				ensure!(price > auction.get_base_price(), Error::<T>::AuctionClosed);
+			}
+			// reserve the difference in bounty
+			ensure!(bounty > auction.bounty, Error::<T>::MinBountyRequired);
+			T::Currency::reserve(&owner, bounty - auction.bounty)?;
+			// update auction
+			Auctions::<T>::insert(&auction_key, Auction::<T> { bounty, terminal_block, ..auction });
+
+			Self::deposit_event(Event::<T>::Extended { auction_key, bounty, terminal_block });
 			Ok(())
 		}
 
@@ -139,8 +167,8 @@ pub mod pallet {
 			// input checks
 			let bidder = ensure_signed(origin)?;
 			let auction = Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionIdNotFound)?;
-			ensure!(bidder != auction_key.0, Error::<T>::BidderIsEmployer);
-			ensure!(bidder != auction.arbitrator, Error::<T>::BidderIsArbitrator);
+			ensure!(bidder != auction_key.0, Error::<T>::OwnerProhibited);
+			ensure!(bidder != auction.arbitrator, Error::<T>::ArbitratorProhibited);
 
 			// check if there is a previous bid
 			let prev_bid = Bids::<T>::get(&auction_key, Key::<T>::default());
@@ -171,10 +199,13 @@ pub mod pallet {
 	// helper functions
 	impl<T: Config> Auction<T> {
 		pub fn get_base_price(&self) -> BalanceOf<T> {
-			let t = frame_system::Pallet::<T>::block_number() - self.opening_block;
-			let duration = self.closing_block - self.opening_block;
-			self.bounty * BalanceOf::<T>::from(t.saturated_into::<u32>()) /
-				BalanceOf::<T>::from(duration.saturated_into::<u32>())
+			let now = frame_system::Pallet::<T>::block_number();
+			if now < self.terminal_block {
+				self.bounty * (now - self.initial_block).saturated_into::<u32>().into() /
+					(self.terminal_block - self.initial_block).saturated_into::<u32>().into()
+			} else {
+				self.bounty
+			}
 		}
 	}
 
