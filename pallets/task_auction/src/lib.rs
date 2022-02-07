@@ -47,14 +47,18 @@ pub mod pallet {
 	pub enum Error<T> {
 		AuctionIdNotFound,
 		AuctionClosed,
+		AuctionNotClosed,
+		AuctionNotDisputed,
 
 		MinBountyRequired,
 		MinDepositRequired,
 		MinBidRatioRequired,
+		PreviousBidRequired,
 
 		OwnerRequired,
 		OwnerProhibited,
 		ArbitratorProhibited,
+		OriginIrrelevant,
 	}
 
 	// Pallets use events to inform users when important changes are made.
@@ -66,7 +70,7 @@ pub mod pallet {
 		Extended { auction_key: Key<T>, bounty: BalanceOf<T>, terminal_block: T::BlockNumber },
 		Bid { auction_key: Key<T>, bid_key: Key<T>, price: BalanceOf<T> },
 		Retracted { auction_key: Key<T>, bid_key: Key<T>, price: BalanceOf<T> },
-		Confirmed { auction_key: Key<T>, owner: bool, bidder: bool, arbitrator: bool },
+		Confirmed { auction_key: Key<T>, confirmation: [Option<bool>; 2] },
 		Cancelled { auction_key: Key<T> },
 	}
 
@@ -79,8 +83,8 @@ pub mod pallet {
 		pub initial_block: T::BlockNumber,
 		pub terminal_block: T::BlockNumber,
 		pub data: BoundedVec<u8, T::MaxDataSize>,
+		pub confirmation: [Option<bool>; 2],
 	}
-
 	// The pallet's runtime storage items.
 	// https://docs.substrate.io/v3/runtime/storage
 	#[pallet::storage]
@@ -128,8 +132,15 @@ pub mod pallet {
 			let auction_key = (owner, nonce);
 
 			// create and insert new auction
-			let auction =
-				Auction::<T> { arbitrator, bounty, deposit, initial_block, terminal_block, data };
+			let auction = Auction::<T> {
+				arbitrator,
+				bounty,
+				deposit,
+				initial_block,
+				terminal_block,
+				data,
+				confirmation: [None; 2],
+			};
 			Auctions::<T>::insert(&auction_key, auction);
 
 			Self::deposit_event(Event::<T>::Created { auction_key, bounty, terminal_block });
@@ -147,7 +158,8 @@ pub mod pallet {
 			let owner = ensure_signed(origin)?;
 			ensure!(owner == auction_key.0, Error::<T>::OwnerRequired);
 			// ensure auction is still open
-			let auction = Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionIdNotFound)?;
+			let mut auction =
+				Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionIdNotFound)?;
 			if let Some((_, price)) = Bids::<T>::get(&auction_key, Key::<T>::default()) {
 				ensure!(price > auction.get_base_price(), Error::<T>::AuctionClosed);
 			}
@@ -155,7 +167,9 @@ pub mod pallet {
 			ensure!(bounty > auction.bounty, Error::<T>::MinBountyRequired);
 			T::Currency::reserve(&owner, bounty - auction.bounty)?;
 			// update auction
-			Auctions::<T>::insert(&auction_key, Auction::<T> { bounty, terminal_block, ..auction });
+			auction.bounty = bounty;
+			auction.terminal_block = terminal_block;
+			Auctions::<T>::insert(&auction_key, auction);
 
 			Self::deposit_event(Event::<T>::Extended { auction_key, bounty, terminal_block });
 			Ok(())
@@ -172,11 +186,10 @@ pub mod pallet {
 			T::Currency::unreserve(&owner, auction.bounty + auction.deposit);
 			// if there are bids
 			if let Some(((bidder, _), price)) = Bids::<T>::get(&auction_key, Key::<T>::default()) {
-				// if auction is closed, pay top bidder the full amount
-				if price <= auction.get_base_price() {
-					T::Currency::transfer(&owner, &bidder, price, ExistenceRequirement::AllowDeath)
-						.expect("should have sufficient funds from unreserving");
-				}
+				// pay top bidder the full amount if auction is closed otherwise pay deposit
+				let pay = if price > auction.get_base_price() { auction.deposit } else { price };
+				T::Currency::transfer(&owner, &bidder, pay, ExistenceRequirement::AllowDeath)
+					.expect("should have sufficient funds from unreserved bounty and deposit");
 				// return deposit to top bidder
 				T::Currency::unreserve(&bidder, auction.deposit);
 			}
@@ -221,6 +234,97 @@ pub mod pallet {
 			Bids::<T>::insert(&auction_key, Key::<T>::default(), (bid_key.clone(), price));
 
 			Self::deposit_event(Event::<T>::Bid { auction_key, bid_key, price });
+			Ok(())
+		}
+
+		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,1))]
+		pub fn retract(origin: OriginFor<T>, auction_key: Key<T>) -> DispatchResult {
+			let bidder = ensure_signed(origin)?;
+			let auction = Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionIdNotFound)?;
+			let (prev_key, prev_price) = Bids::<T>::get(&auction_key, Key::<T>::default())
+				.ok_or(Error::<T>::PreviousBidRequired)?;
+			ensure!(bidder == prev_key.0, Error::<T>::PreviousBidRequired);
+			/*
+			let pay =
+
+			let prev_key = if let Some((prev_key, prev_price)) = prev_bid {
+				if ()
+				// ensure auction is still open
+				ensure!(prev_price > auction.get_base_price(), Error::<T>::AuctionClosed);
+				// ensure new bid is lower than prev bid
+				ensure!(prev_price > price, Error::<T>::MinBidRatioRequired);
+				// unreserve deposit of previous bidder
+				T::Currency::unreserve(&prev_key.0, auction.deposit);
+				prev_key
+			} else {
+				Key::<T>::default()
+			};
+			*/
+			Ok(())
+		}
+
+		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,1))]
+		pub fn confirm(
+			origin: OriginFor<T>,
+			auction_key: Key<T>,
+			fulfilled: bool,
+		) -> DispatchResult {
+			let signer = ensure_signed(origin)?;
+			let owner = &auction_key.0;
+			// ensure auction is closed
+			let mut auction =
+				Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionIdNotFound)?;
+			if let Some(((bidder, _), price)) = Bids::<T>::get(&auction_key, Key::<T>::default()) {
+				ensure!(price <= auction.get_base_price(), Error::<T>::AuctionNotClosed);
+				if signer == auction.arbitrator {
+					/*
+					if if let [Some(bidder_confirm), Some(owner_confirm)] = auction.confirmation {
+						bidder_confirm != owner_confirm
+					} else {
+						false
+					} {} else {Error::<T>}
+					*/
+					match auction.confirmation {
+						[Some(bidder_confirm), Some(owner_confirm)]
+							if bidder_confirm != owner_confirm =>
+						{
+							T::Currency::unreserve(owner, auction.deposit + auction.bounty);
+							T::Currency::unreserve(&bidder, auction.deposit);
+							// arbitrator takes deposit from losing party of dispute
+							T::Currency::transfer(
+								owner,
+								if fulfilled { owner } else { &bidder },
+								auction.deposit,
+								ExistenceRequirement::AllowDeath,
+							)
+							.unwrap();
+							// owner pays bidder if task has been fulfilled
+							if fulfilled {
+								T::Currency::transfer(
+									owner,
+									&bidder,
+									price,
+									ExistenceRequirement::AllowDeath,
+								)
+								.unwrap();
+							}
+							Ok(())
+						},
+						_ => Err(Error::<T>::AuctionNotDisputed),
+					}?;
+				} else if signer == bidder {
+				} else if signer == *owner {
+					if let Some(bidder_confirm) = auction.confirmation[0] {
+					} else {
+						auction.confirmation[1] = Some(fulfilled);
+						let confirmation = auction.confirmation.clone();
+						Auctions::<T>::insert(&auction_key, auction);
+						Self::deposit_event(Event::<T>::Confirmed { auction_key, confirmation });
+					}
+				} else {
+					Err(Error::<T>::OriginIrrelevant)?;
+				}
+			}
 			Ok(())
 		}
 	}
