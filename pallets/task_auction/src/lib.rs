@@ -18,7 +18,7 @@ pub mod pallet {
 
 	use frame_support::{
 		sp_runtime::SaturatedConversion,
-		traits::{Currency, ExistenceRequirement, ReservableCurrency, WithdrawReasons},
+		traits::{Currency, ExistenceRequirement, ReservableCurrency},
 	};
 
 	type AccountIdOf<T> = <T as frame_system::Config>::AccountId;
@@ -65,6 +65,9 @@ pub mod pallet {
 		Created { auction_key: Key<T>, bounty: BalanceOf<T>, terminal_block: T::BlockNumber },
 		Extended { auction_key: Key<T>, bounty: BalanceOf<T>, terminal_block: T::BlockNumber },
 		Bid { auction_key: Key<T>, bid_key: Key<T>, price: BalanceOf<T> },
+		Retracted { auction_key: Key<T>, bid_key: Key<T>, price: BalanceOf<T> },
+		Confirmed { auction_key: Key<T>, owner: bool, bidder: bool, arbitrator: bool },
+		Cancelled { auction_key: Key<T> },
 	}
 
 	#[derive(Encode, Decode, TypeInfo)]
@@ -155,6 +158,32 @@ pub mod pallet {
 			Auctions::<T>::insert(&auction_key, Auction::<T> { bounty, terminal_block, ..auction });
 
 			Self::deposit_event(Event::<T>::Extended { auction_key, bounty, terminal_block });
+			Ok(())
+		}
+
+		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,1))]
+		pub fn cancel(origin: OriginFor<T>, auction_key: Key<T>) -> DispatchResult {
+			// only owner of auction can cancel
+			let owner = ensure_signed(origin)?;
+			ensure!(owner == auction_key.0, Error::<T>::OwnerRequired);
+
+			// return bounty and deposit to owner
+			let auction = Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionIdNotFound)?;
+			T::Currency::unreserve(&owner, auction.bounty + auction.deposit);
+			// if there are bids
+			if let Some(((bidder, _), price)) = Bids::<T>::get(&auction_key, Key::<T>::default()) {
+				// if auction is closed, pay top bidder the full amount
+				if price <= auction.get_base_price() {
+					T::Currency::transfer(&owner, &bidder, price, ExistenceRequirement::AllowDeath)
+						.expect("should have sufficient funds from unreserving");
+				}
+				// return deposit to top bidder
+				T::Currency::unreserve(&bidder, auction.deposit);
+			}
+			// delete auction from storage
+			Bids::<T>::remove_prefix(&auction_key, None);
+			Auctions::<T>::remove(&auction_key);
+			Self::deposit_event(Event::<T>::Cancelled { auction_key });
 			Ok(())
 		}
 
