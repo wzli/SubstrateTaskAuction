@@ -16,8 +16,9 @@ pub mod pallet {
 	use frame_support::pallet_prelude::*;
 	use frame_system::pallet_prelude::*;
 
-	use frame_support::traits::{
-		Currency, ExistenceRequirement, ReservableCurrency, WithdrawReasons,
+	use frame_support::{
+		sp_runtime::SaturatedConversion,
+		traits::{Currency, ExistenceRequirement, ReservableCurrency, WithdrawReasons},
 	};
 
 	type AccountIdOf<T> = <T as frame_system::Config>::AccountId;
@@ -47,7 +48,8 @@ pub mod pallet {
 		pub arbitrator: T::AccountId,
 		pub bounty: BalanceOf<T>,
 		pub deposit: BalanceOf<T>,
-		pub deadline: T::BlockNumber,
+		pub opening_block: T::BlockNumber,
+		pub closing_block: T::BlockNumber,
 		pub data: BoundedVec<u8, T::MaxDataSize>,
 	}
 
@@ -75,14 +77,14 @@ pub mod pallet {
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
 	pub enum Event<T: Config> {
-		Created { auction_key: Key<T>, bounty: BalanceOf<T>, deadline: T::BlockNumber },
+		Created { auction_key: Key<T>, bounty: BalanceOf<T>, closing_block: T::BlockNumber },
 		Bid { auction_key: Key<T>, bid_key: Key<T>, price: BalanceOf<T> },
 	}
 
 	// Errors inform users that something went wrong.
 	#[pallet::error]
 	pub enum Error<T> {
-		DeadlineExpired,
+		AuctionClosed,
 		MinBountyRequired,
 		MinDepositRequired,
 		MinBidRatioRequired,
@@ -102,17 +104,15 @@ pub mod pallet {
 			arbitrator: T::AccountId,
 			bounty: BalanceOf<T>,
 			deposit: BalanceOf<T>,
-			deadline: T::BlockNumber,
+			closing_block: T::BlockNumber,
 			data: BoundedVec<u8, T::MaxDataSize>,
 		) -> DispatchResult {
 			// input checks
 			let employer = ensure_signed(origin)?;
+			let opening_block = frame_system::Pallet::<T>::block_number();
+			ensure!(opening_block < closing_block, Error::<T>::AuctionClosed);
 			ensure!(bounty >= T::MinBounty::get(), Error::<T>::MinBountyRequired);
 			ensure!(deposit >= T::MinDeposit::get(), Error::<T>::MinDepositRequired);
-			ensure!(
-				deadline > frame_system::Pallet::<T>::block_number(),
-				Error::<T>::DeadlineExpired
-			);
 
 			// reserve balance for bounty and deposit
 			T::Currency::reserve(&employer, bounty + deposit)?;
@@ -122,10 +122,11 @@ pub mod pallet {
 			let auction_key = (employer, nonce);
 
 			// create and insert new auction
-			let auction = Auction::<T> { arbitrator, bounty, deposit, deadline, data };
+			let auction =
+				Auction::<T> { arbitrator, bounty, deposit, opening_block, closing_block, data };
 			Auctions::<T>::insert(&auction_key, auction);
 
-			Self::deposit_event(Event::<T>::Created { auction_key, bounty, deadline });
+			Self::deposit_event(Event::<T>::Created { auction_key, bounty, closing_block });
 			Ok(())
 		}
 
@@ -138,18 +139,17 @@ pub mod pallet {
 			// input checks
 			let bidder = ensure_signed(origin)?;
 			let auction = Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionIdNotFound)?;
-			ensure!(
-				auction.deadline >= frame_system::Pallet::<T>::block_number(),
-				Error::<T>::DeadlineExpired
-			);
 			ensure!(bidder != auction_key.0, Error::<T>::BidderIsEmployer);
 			ensure!(bidder != auction.arbitrator, Error::<T>::BidderIsArbitrator);
 
-			// if there is a previous bid, ensure new bid is lower,
-			// then unreserve deposit of previous bidder
+			// check if there is a previous bid
 			let prev_bid = Bids::<T>::get(&auction_key, Key::<T>::default());
 			let prev_key = if let Some((prev_key, prev_price)) = prev_bid {
+				// ensure auction is still open
+				ensure!(prev_price > auction.get_base_price(), Error::<T>::AuctionClosed);
+				// ensure new bid is lower than prev bid
 				ensure!(prev_price > price, Error::<T>::MinBidRatioRequired);
+				// unreserve deposit of previous bidder
 				T::Currency::unreserve(&prev_key.0, auction.deposit);
 				prev_key
 			} else {
@@ -165,6 +165,16 @@ pub mod pallet {
 
 			Self::deposit_event(Event::<T>::Bid { auction_key, bid_key, price });
 			Ok(())
+		}
+	}
+
+	// helper functions
+	impl<T: Config> Auction<T> {
+		pub fn get_base_price(&self) -> BalanceOf<T> {
+			let t = frame_system::Pallet::<T>::block_number() - self.opening_block;
+			let duration = self.closing_block - self.opening_block;
+			self.bounty * BalanceOf::<T>::from(t.saturated_into::<u32>()) /
+				BalanceOf::<T>::from(duration.saturated_into::<u32>())
 		}
 	}
 

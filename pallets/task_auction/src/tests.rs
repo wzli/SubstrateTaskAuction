@@ -12,7 +12,7 @@ fn create() {
 			vec![1, 2, 3].try_into().unwrap();
 		assert_err!(
 			TaskAuction::create(Origin::signed(0xA), 0xB, 1000, 500, 0, test_data.clone()),
-			Error::<Test>::DeadlineExpired
+			Error::<Test>::AuctionClosed
 		);
 		assert_err!(
 			TaskAuction::create(Origin::signed(0xA), 0xB, 100, 500, 5, test_data.clone()),
@@ -33,11 +33,14 @@ fn create() {
 
 		// check successful creation
 		assert_ok!(TaskAuction::create(Origin::signed(0xA), 0xB, 1000, 500, 5, test_data.clone()));
-		if let Event::TaskAuction(crate::Event::<Test>::Created { auction_key, bounty, deadline }) =
-			last_event()
+		if let Event::TaskAuction(crate::Event::<Test>::Created {
+			auction_key,
+			bounty,
+			closing_block,
+		}) = last_event()
 		{
 			assert_eq!(bounty, 1000);
-			assert_eq!(deadline, 5);
+			assert_eq!(closing_block, 5);
 			assert_eq!(Balances::reserved_balance(&0xA), 1500);
 
 			let auction = TaskAuction::auctions(auction_key).unwrap();
@@ -45,7 +48,7 @@ fn create() {
 			assert_eq!(auction.arbitrator, 0xB);
 			assert_eq!(auction.bounty, 1000);
 			assert_eq!(auction.deposit, 500);
-			assert_eq!(auction.deadline, 5);
+			assert_eq!(auction.closing_block, 5);
 			assert_eq!(auction.data, vec![1, 2, 3]);
 			assert!(TaskAuction::bids(auction_key, (0, 0)).is_none());
 		} else {
@@ -67,15 +70,9 @@ fn bid() {
 		if let Event::TaskAuction(crate::Event::<Test>::Created {
 			auction_key,
 			bounty: _,
-			deadline: _,
+			closing_block: _,
 		}) = last_event()
 		{
-			System::set_block_number(6);
-			assert_err!(
-				TaskAuction::bid(Origin::signed(0xC), auction_key, 100),
-				Error::<Test>::DeadlineExpired
-			);
-			System::set_block_number(1);
 			assert_err!(
 				TaskAuction::bid(Origin::signed(0xA), auction_key, 100),
 				Error::<Test>::BidderIsEmployer
@@ -86,21 +83,26 @@ fn bid() {
 			);
 
 			assert!(TaskAuction::bids(auction_key, (0, 0)).is_none());
-			assert_ok!(TaskAuction::bid(Origin::signed(0xC), auction_key, 200));
+			assert_ok!(TaskAuction::bid(Origin::signed(0xC), auction_key, 300));
 			assert_eq!(Balances::reserved_balance(&0xC), 500);
 			assert!(TaskAuction::bids(auction_key, (0, 0)).is_some());
 
 			assert_err!(
-				TaskAuction::bid(Origin::signed(0xD), auction_key, 300),
+				TaskAuction::bid(Origin::signed(0xD), auction_key, 400),
 				Error::<Test>::MinBidRatioRequired
 			);
 			assert!(TaskAuction::bids(auction_key, (0, 0)).is_some());
 
 			for i in 1..10 {
-				let price = (200 - i) as u128;
+				let price = (300 - i) as u128;
 				assert_ok!(TaskAuction::bid(Origin::signed(0xD), auction_key, price));
 				assert_eq!(TaskAuction::bids(auction_key, (0, 0)).unwrap().1, price);
 			}
+			System::set_block_number(3);
+			assert_err!(
+				TaskAuction::bid(Origin::signed(0xC), auction_key, 100),
+				Error::<Test>::AuctionClosed
+			);
 		}
 	})
 }
