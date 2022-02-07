@@ -16,13 +16,13 @@ pub mod pallet {
 	use frame_support::pallet_prelude::*;
 	use frame_system::pallet_prelude::*;
 
-	use frame_support::{
-		sp_runtime::traits::Hash,
-		traits::{Currency, ExistenceRequirement, ReservableCurrency, WithdrawReasons},
+	use frame_support::traits::{
+		Currency, ExistenceRequirement, ReservableCurrency, WithdrawReasons,
 	};
 
-	type BalanceOf<T> =
-		<<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
+	type AccountIdOf<T> = <T as frame_system::Config>::AccountId;
+	type BalanceOf<T> = <<T as Config>::Currency as Currency<AccountIdOf<T>>>::Balance;
+	type Key<T> = (AccountIdOf<T>, <T as frame_system::Config>::Index);
 
 	/// Configure the pallet by specifying the parameters and types on which it depends.
 	#[pallet::config]
@@ -43,12 +43,7 @@ pub mod pallet {
 
 	#[derive(Encode, Decode, TypeInfo)]
 	#[scale_info(skip_type_params(T))]
-	pub struct Bid<T: Config>(pub T::AccountId, pub BalanceOf<T>);
-
-	#[derive(Encode, Decode, TypeInfo)]
-	#[scale_info(skip_type_params(T))]
 	pub struct Auction<T: Config> {
-		pub employer: T::AccountId,
 		pub arbitrator: T::AccountId,
 		pub bounty: BalanceOf<T>,
 		pub deposit: BalanceOf<T>,
@@ -60,20 +55,28 @@ pub mod pallet {
 	// https://docs.substrate.io/v3/runtime/storage
 	#[pallet::storage]
 	#[pallet::getter(fn auctions)]
-	pub(super) type Auctions<T: Config> = StorageMap<_, Identity, T::Hash, Auction<T>, OptionQuery>;
+	pub(super) type Auctions<T: Config> =
+		StorageMap<_, Twox64Concat, Key<T>, Auction<T>, OptionQuery>;
 
 	#[pallet::storage]
 	#[pallet::getter(fn bids)]
-	pub(super) type Bids<T: Config> =
-		StorageDoubleMap<_, Identity, T::Hash, Identity, T::AccountId, Bid<T>, OptionQuery>;
+	pub(super) type Bids<T: Config> = StorageDoubleMap<
+		_,
+		Twox64Concat,
+		Key<T>,
+		Twox64Concat,
+		Key<T>,
+		(Key<T>, BalanceOf<T>),
+		OptionQuery,
+	>;
 
 	// Pallets use events to inform users when important changes are made.
 	// https://docs.substrate.io/v3/runtime/events-and-errors
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
 	pub enum Event<T: Config> {
-		Created { auction_id: T::Hash, bounty: BalanceOf<T>, deadline: T::BlockNumber },
-		Bid { auction_id: T::Hash, bidder: T::AccountId, price: BalanceOf<T> },
+		Created { auction_key: Key<T>, bounty: BalanceOf<T>, deadline: T::BlockNumber },
+		Bid { auction_key: Key<T>, bid_key: Key<T>, price: BalanceOf<T> },
 	}
 
 	// Errors inform users that something went wrong.
@@ -114,50 +117,53 @@ pub mod pallet {
 			// reserve balance for bounty and deposit
 			T::Currency::reserve(&employer, bounty + deposit)?;
 
-			// generate auction id
+			// generate auction key
 			let nonce = frame_system::Pallet::<T>::account_nonce(&employer);
-			let auction_id = T::Hashing::hash_of(&(employer.clone(), nonce));
+			let auction_key = (employer, nonce);
 
 			// create and insert new auction
-			let auction = Auction::<T> { employer, arbitrator, bounty, deposit, deadline, data };
-			Auctions::<T>::insert(&auction_id, auction);
+			let auction = Auction::<T> { arbitrator, bounty, deposit, deadline, data };
+			Auctions::<T>::insert(&auction_key, auction);
 
-			Self::deposit_event(Event::<T>::Created { auction_id, bounty, deadline });
+			Self::deposit_event(Event::<T>::Created { auction_key, bounty, deadline });
 			Ok(())
 		}
 
 		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,1))]
 		pub fn bid(
 			origin: OriginFor<T>,
-			auction_id: T::Hash,
+			auction_key: Key<T>,
 			price: BalanceOf<T>,
 		) -> DispatchResult {
 			// input checks
 			let bidder = ensure_signed(origin)?;
-			let auction = Auctions::<T>::get(&auction_id).ok_or(Error::<T>::AuctionIdNotFound)?;
+			let auction = Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionIdNotFound)?;
 			ensure!(
 				auction.deadline >= frame_system::Pallet::<T>::block_number(),
 				Error::<T>::DeadlineExpired
 			);
-			ensure!(bidder != auction.employer, Error::<T>::BidderIsEmployer);
+			ensure!(bidder != auction_key.0, Error::<T>::BidderIsEmployer);
 			ensure!(bidder != auction.arbitrator, Error::<T>::BidderIsArbitrator);
 
 			// if there is a previous bid, ensure new bid is lower,
 			// then unreserve deposit of previous bidder
-			let prev_bid = Bids::<T>::get(&auction_id, T::AccountId::default());
-			let prev_bidder = if let Some(Bid(prev_bidder, prev_price)) = prev_bid {
+			let prev_bid = Bids::<T>::get(&auction_key, Key::<T>::default());
+			let prev_key = if let Some((prev_key, prev_price)) = prev_bid {
 				ensure!(prev_price > price, Error::<T>::MinBidRatioRequired);
-				T::Currency::unreserve(&prev_bidder, auction.deposit);
-				prev_bidder
+				T::Currency::unreserve(&prev_key.0, auction.deposit);
+				prev_key
 			} else {
-				T::AccountId::default()
+				Key::<T>::default()
 			};
-			// all checks pass, reserve deposit and insert bid
+			// all checks pass, reserve deposit of new bidder
 			T::Currency::reserve(&bidder, auction.deposit)?;
-			Bids::<T>::insert(&auction_id, &bidder, Bid(prev_bidder, price));
-			Bids::<T>::insert(&auction_id, T::AccountId::default(), Bid(bidder.clone(), price));
+			// insert new bid
+			let nonce = frame_system::Pallet::<T>::account_nonce(&bidder);
+			let bid_key = (bidder, nonce);
+			Bids::<T>::insert(&auction_key, &bid_key, (prev_key, price));
+			Bids::<T>::insert(&auction_key, Key::<T>::default(), (bid_key.clone(), price));
 
-			Self::deposit_event(Event::<T>::Bid { auction_id, bidder, price });
+			Self::deposit_event(Event::<T>::Bid { auction_key, bid_key, price });
 			Ok(())
 		}
 	}
