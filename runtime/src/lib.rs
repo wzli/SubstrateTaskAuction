@@ -274,7 +274,7 @@ impl pallet_sudo::Config for Runtime {
 }
 
 parameter_types! {
-	pub const MinBidRatio: u8 = 50;
+	pub const MinBidRatio: u8 = 250;
 	pub const MaxDataSize: u32 = 1024;
 }
 

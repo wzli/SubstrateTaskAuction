@@ -38,7 +38,7 @@ pub mod pallet {
 		#[pallet::constant] // put the constant in metadata
 		type MinDeposit: Get<BalanceOf<Self>>;
 		#[pallet::constant] // put the constant in metadata
-		type MinBidRatio: Get<u32>;
+		type MinBidRatio: Get<u8>;
 		#[pallet::constant] // put the constant in metadata
 		type MaxDataSize: Get<u32>;
 	}
@@ -233,11 +233,16 @@ pub mod pallet {
 				// ensure auction is not assigned
 				ensure!(!auction.is_assigned(prev_price), Error::<T>::AuctionAssigned);
 				// ensure new bid is lower than prev bid
-				ensure!(prev_price > price, Error::<T>::MinBidRatioRequired);
+				ensure!(
+					prev_price * T::MinBidRatio::get().into() > price * 255u8.into(),
+					Error::<T>::MinBidRatioRequired
+				);
 				// unreserve deposit of previous bidder
 				T::Currency::unreserve(&prev_key.0, auction.deposit);
 				prev_key
 			} else {
+				// first bid must be within bounty
+				ensure!(auction.bounty >= price, Error::<T>::MinBidRatioRequired);
 				Key::<T>::default()
 			};
 			// all checks pass, reserve deposit of new bidder

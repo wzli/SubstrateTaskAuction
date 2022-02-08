@@ -75,7 +75,7 @@ impl pallet_balances::Config for Test {
 }
 
 parameter_types! {
-	pub const MinBidRatio: u8 = 50;
+	pub const MinBidRatio: u8 = 250;
 	pub const MaxDataSize: u32 = 1024;
 }
 
