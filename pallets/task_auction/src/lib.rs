@@ -17,6 +17,7 @@ pub mod pallet {
 	use frame_system::pallet_prelude::*;
 
 	use frame_support::{
+		inherent::Vec,
 		sp_runtime::SaturatedConversion,
 		traits::{Currency, ExistenceRequirement, ReservableCurrency},
 	};
@@ -54,6 +55,7 @@ pub mod pallet {
 		MinBountyRequired,
 		MinDepositRequired,
 		MinBidRatioRequired,
+		MaxDataSizeExceeded,
 		TopBidRequired,
 
 		OwnerRequired,
@@ -84,7 +86,7 @@ pub mod pallet {
 		pub deposit: BalanceOf<T>,
 		pub initial_block: T::BlockNumber,
 		pub terminal_block: T::BlockNumber,
-		pub data: BoundedVec<u8, T::MaxDataSize>,
+		pub data: Vec<u8>,
 		pub in_dispute: bool,
 	}
 	// The pallet's runtime storage items.
@@ -118,13 +120,17 @@ pub mod pallet {
 			bounty: BalanceOf<T>,
 			deposit: BalanceOf<T>,
 			terminal_block: T::BlockNumber,
-			data: BoundedVec<u8, T::MaxDataSize>,
+			data: Vec<u8>,
 		) -> DispatchResult {
 			// input checks
 			let owner = ensure_signed(origin)?;
 			let initial_block = frame_system::Pallet::<T>::block_number();
 			ensure!(bounty >= T::MinBounty::get(), Error::<T>::MinBountyRequired);
 			ensure!(deposit >= T::MinDeposit::get(), Error::<T>::MinDepositRequired);
+			ensure!(
+				data.len() <= T::MaxDataSize::get().try_into().unwrap(),
+				Error::<T>::MaxDataSizeExceeded
+			);
 
 			// reserve balance for bounty and deposit
 			T::Currency::reserve(&owner, bounty + deposit)?;

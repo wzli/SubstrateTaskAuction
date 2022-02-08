@@ -1,5 +1,5 @@
 use crate::{mock::*, Error};
-use frame_support::{assert_err, assert_ok, BoundedVec};
+use frame_support::{assert_err, assert_ok};
 
 fn last_event() -> Event {
 	System::events().pop().expect("Event expected").event
@@ -8,14 +8,11 @@ fn last_event() -> Event {
 #[test]
 fn create() {
 	new_test_ext().execute_with(|| {
-		let test_data: BoundedVec<u8, <Test as crate::Config>::MaxDataSize> =
-			vec![1, 2, 3].try_into().unwrap();
-		/*
+		let test_data = vec![1, 2, 3];
 		assert_err!(
-			TaskAuction::create(Origin::signed(0xA), 0xB, 1000, 500, 0, test_data.clone()),
-			Error::<Test>::AuctionAssigned
+			TaskAuction::create(Origin::signed(0xA), 0xB, 1000, 500, 5, vec![0; 2000]),
+			Error::<Test>::MaxDataSizeExceeded
 		);
-		*/
 		assert_err!(
 			TaskAuction::create(Origin::signed(0xA), 0xB, 100, 500, 5, test_data.clone()),
 			Error::<Test>::MinBountyRequired
@@ -62,8 +59,7 @@ fn create() {
 #[test]
 fn bid() {
 	new_test_ext().execute_with(|| {
-		let test_data: BoundedVec<u8, <Test as crate::Config>::MaxDataSize> =
-			vec![1, 2, 3].try_into().unwrap();
+		let test_data = vec![1, 2, 3];
 		assert_err!(
 			TaskAuction::bid(Origin::signed(0xA), (1, 1), 100),
 			Error::<Test>::AuctionIdNotFound
