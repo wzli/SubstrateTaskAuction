@@ -48,6 +48,7 @@ pub mod pallet {
 		AuctionIdNotFound,
 		AuctionAssigned,
 		AuctionNotAssigned,
+		AuctionDisputed,
 		AuctionNotDisputed,
 
 		MinBountyRequired,
@@ -56,8 +57,7 @@ pub mod pallet {
 		TopBidRequired,
 
 		OwnerRequired,
-		OwnerProhibited,
-		ArbitratorProhibited,
+		OriginProhibited,
 	}
 
 	// Pallets use events to inform users when important changes are made.
@@ -72,6 +72,8 @@ pub mod pallet {
 
 		Cancelled { auction_key: Key<T> },
 		Confirmed { auction_key: Key<T> },
+		Disputed { auction_key: Key<T> },
+		Arbitrated { auction_key: Key<T>, fulfilled: bool },
 	}
 
 	#[derive(Encode, Decode, TypeInfo)]
@@ -83,6 +85,7 @@ pub mod pallet {
 		pub initial_block: T::BlockNumber,
 		pub terminal_block: T::BlockNumber,
 		pub data: BoundedVec<u8, T::MaxDataSize>,
+		pub in_dispute: bool,
 	}
 	// The pallet's runtime storage items.
 	// https://docs.substrate.io/v3/runtime/storage
@@ -131,8 +134,15 @@ pub mod pallet {
 			let auction_key = (owner, nonce);
 
 			// create and insert new auction
-			let auction =
-				Auction::<T> { arbitrator, bounty, deposit, initial_block, terminal_block, data };
+			let auction = Auction::<T> {
+				arbitrator,
+				bounty,
+				deposit,
+				initial_block,
+				terminal_block,
+				data,
+				in_dispute: false,
+			};
 			Auctions::<T>::insert(&auction_key, auction);
 
 			Self::deposit_event(Event::<T>::Created { auction_key, bounty, terminal_block });
@@ -208,8 +218,8 @@ pub mod pallet {
 			// input checks
 			let bidder = ensure_signed(origin)?;
 			let auction = Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionIdNotFound)?;
-			ensure!(bidder != auction_key.0, Error::<T>::OwnerProhibited);
-			ensure!(bidder != auction.arbitrator, Error::<T>::ArbitratorProhibited);
+			ensure!(bidder != auction_key.0, Error::<T>::OriginProhibited);
+			ensure!(bidder != auction.arbitrator, Error::<T>::OriginProhibited);
 
 			// check if there is a previous bid
 			let prev_bid = Bids::<T>::get(&auction_key, Key::<T>::default());
@@ -245,7 +255,8 @@ pub mod pallet {
 				.ok_or(Error::<T>::TopBidRequired)?;
 			// only the top bid can be retracted
 			ensure!(bidder == top_key.0, Error::<T>::TopBidRequired);
-
+			// cannot retract bid when auction is in dispute
+			ensure!(!auction.in_dispute, Error::<T>::AuctionDisputed);
 			// bidder loses deposit to owner if auction is assigned
 			if auction.is_assigned(top_price) {
 				T::Currency::unreserve(&bidder, auction.deposit);
@@ -298,6 +309,73 @@ pub mod pallet {
 			Bids::<T>::remove_prefix(&auction_key, None);
 			Auctions::<T>::remove(&auction_key);
 			Self::deposit_event(Event::<T>::Confirmed { auction_key });
+			Ok(())
+		}
+
+		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,1))]
+		pub fn dispute(origin: OriginFor<T>, auction_key: Key<T>) -> DispatchResult {
+			let origin = ensure_signed(origin)?;
+			// fetch auction
+			let mut auction =
+				Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionIdNotFound)?;
+			// auction is already in dispute
+			ensure!(!auction.in_dispute, Error::<T>::AuctionDisputed);
+			// fetch top bid
+			if let Some(((bidder, _), price)) = Bids::<T>::get(&auction_key, Key::<T>::default()) {
+				// only assigned auctions can be disputed
+				ensure!(auction.is_assigned(price), Error::<T>::AuctionNotAssigned);
+				// only owner or bidder can dispute
+				ensure!(origin == bidder || origin == auction_key.0, Error::<T>::OriginProhibited);
+			} else {
+				Err(Error::<T>::AuctionNotAssigned)?
+			}
+			auction.in_dispute = true;
+			Self::deposit_event(Event::<T>::Disputed { auction_key });
+			Ok(())
+		}
+
+		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,1))]
+		pub fn arbitrate(
+			origin: OriginFor<T>,
+			auction_key: Key<T>,
+			fulfilled: bool,
+		) -> DispatchResult {
+			let arbitrator = ensure_signed(origin)?;
+			let auction = Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionIdNotFound)?;
+			// only the arbitrator is allowed
+			ensure!(arbitrator == auction.arbitrator, Error::<T>::OriginProhibited);
+			// auction must be in dispute
+			ensure!(auction.in_dispute, Error::<T>::AuctionDisputed);
+			// fetch bidder
+			let ((bidder, _), price) = Bids::<T>::get(&auction_key, Key::<T>::default()).unwrap();
+			// unreserve funds
+			T::Currency::unreserve(&auction_key.0, auction.deposit + auction.bounty);
+			T::Currency::unreserve(&bidder, auction.deposit);
+			// pay bidder if task is fulfilled
+			let loser = if fulfilled {
+				T::Currency::transfer(
+					&auction_key.0,
+					&bidder,
+					price,
+					ExistenceRequirement::AllowDeath,
+				)
+				.unwrap();
+				&auction_key.0
+			} else {
+				&bidder
+			};
+			// losing side pays arbitrator their deposit
+			T::Currency::transfer(
+				loser,
+				&arbitrator,
+				auction.deposit,
+				ExistenceRequirement::AllowDeath,
+			)
+			.unwrap();
+			// delete auction from storage
+			Bids::<T>::remove_prefix(&auction_key, None);
+			Auctions::<T>::remove(&auction_key);
+			Self::deposit_event(Event::<T>::Arbitrated { auction_key, fulfilled });
 			Ok(())
 		}
 	}

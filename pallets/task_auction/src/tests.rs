@@ -13,7 +13,7 @@ fn create() {
 		/*
 		assert_err!(
 			TaskAuction::create(Origin::signed(0xA), 0xB, 1000, 500, 0, test_data.clone()),
-			Error::<Test>::AuctionClosed
+			Error::<Test>::AuctionAssigned
 		);
 		*/
 		assert_err!(
@@ -77,11 +77,11 @@ fn bid() {
 		{
 			assert_err!(
 				TaskAuction::bid(Origin::signed(0xA), auction_key, 100),
-				Error::<Test>::OwnerProhibited
+				Error::<Test>::OriginProhibited
 			);
 			assert_err!(
 				TaskAuction::bid(Origin::signed(0xB), auction_key, 100),
-				Error::<Test>::ArbitratorProhibited
+				Error::<Test>::OriginProhibited
 			);
 
 			assert!(TaskAuction::bids(auction_key, (0, 0)).is_none());
@@ -103,7 +103,7 @@ fn bid() {
 			System::set_block_number(3);
 			assert_err!(
 				TaskAuction::bid(Origin::signed(0xC), auction_key, 100),
-				Error::<Test>::AuctionClosed
+				Error::<Test>::AuctionAssigned
 			);
 		}
 	})
