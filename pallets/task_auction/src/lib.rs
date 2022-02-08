@@ -26,20 +26,19 @@ pub mod pallet {
 	type BalanceOf<T> = <<T as Config>::Currency as Currency<AccountIdOf<T>>>::Balance;
 	type Key<T> = (AccountIdOf<T>, <T as frame_system::Config>::Index);
 
-	/// Configure the pallet by specifying the parameters and types on which it depends.
+	// Configure the pallet by specifying the parameters and types on which it depends.
 	#[pallet::config]
 	pub trait Config: frame_system::Config {
-		/// Because this pallet emits events, it depends on the runtime's definition of an event.
 		type Event: From<Event<Self>> + IsType<<Self as frame_system::Config>::Event>;
 		type Currency: ReservableCurrency<Self::AccountId>;
 
-		#[pallet::constant] // put the constant in metadata
+		#[pallet::constant]
 		type MinBounty: Get<BalanceOf<Self>>;
-		#[pallet::constant] // put the constant in metadata
+		#[pallet::constant]
 		type MinDeposit: Get<BalanceOf<Self>>;
-		#[pallet::constant] // put the constant in metadata
+		#[pallet::constant]
 		type MinBidRatio: Get<u8>;
-		#[pallet::constant] // put the constant in metadata
+		#[pallet::constant]
 		type MaxDataSize: Get<u32>;
 	}
 
@@ -56,8 +55,8 @@ pub mod pallet {
 		MinDepositRequired,
 		MinBidRatioRequired,
 		MaxDataSizeExceeded,
-		TopBidRequired,
 
+		TopBidRequired,
 		OwnerRequired,
 		OriginProhibited,
 	}
@@ -69,15 +68,18 @@ pub mod pallet {
 	pub enum Event<T: Config> {
 		Created { auction_key: Key<T>, bounty: BalanceOf<T>, terminal_block: T::BlockNumber },
 		Extended { auction_key: Key<T>, bounty: BalanceOf<T>, terminal_block: T::BlockNumber },
+
 		Bid { auction_key: Key<T>, bid_key: Key<T>, price: BalanceOf<T> },
 		Retracted { auction_key: Key<T>, bid_key: Key<T>, price: BalanceOf<T> },
 
-		Cancelled { auction_key: Key<T> },
 		Confirmed { auction_key: Key<T> },
+		Cancelled { auction_key: Key<T> },
+
 		Disputed { auction_key: Key<T> },
 		Arbitrated { auction_key: Key<T>, fulfilled: bool },
 	}
 
+	// Pallets types to use in dispatchable interface.
 	#[derive(Encode, Decode, TypeInfo)]
 	#[scale_info(skip_type_params(T))]
 	pub struct Auction<T: Config> {
@@ -89,6 +91,7 @@ pub mod pallet {
 		pub data: Vec<u8>,
 		pub in_dispute: bool,
 	}
+
 	// The pallet's runtime storage items.
 	// https://docs.substrate.io/v3/runtime/storage
 	#[pallet::storage]
@@ -180,38 +183,6 @@ pub mod pallet {
 			Auctions::<T>::insert(&auction_key, auction);
 
 			Self::deposit_event(Event::<T>::Extended { auction_key, bounty, terminal_block });
-			Ok(())
-		}
-
-		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,1))]
-		pub fn cancel(origin: OriginFor<T>, auction_key: Key<T>) -> DispatchResult {
-			// only owner of auction can cancel
-			let owner = ensure_signed(origin)?;
-			ensure!(owner == auction_key.0, Error::<T>::OwnerRequired);
-			// fetch auction and top bid
-			let auction = Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionIdNotFound)?;
-			if let Some(((bidder, _), price)) = Bids::<T>::get(&auction_key, Key::<T>::default()) {
-				// only unassigned auctions can be cancelled
-				ensure!(!auction.is_assigned(price), Error::<T>::AuctionAssigned);
-				// unreserve deposits of bidder and owner
-				T::Currency::unreserve(&bidder, auction.deposit);
-				T::Currency::unreserve(&owner, auction.deposit + auction.bounty);
-				// owner pays bidder the deposit
-				T::Currency::transfer(
-					&owner,
-					&bidder,
-					auction.deposit,
-					ExistenceRequirement::AllowDeath,
-				)
-				.unwrap();
-			} else {
-				// unreserve deposits of owner
-				T::Currency::unreserve(&owner, auction.deposit + auction.bounty);
-			}
-			// delete auction from storage
-			Bids::<T>::remove_prefix(&auction_key, None);
-			Auctions::<T>::remove(&auction_key);
-			Self::deposit_event(Event::<T>::Cancelled { auction_key });
 			Ok(())
 		}
 
@@ -320,6 +291,38 @@ pub mod pallet {
 			Bids::<T>::remove_prefix(&auction_key, None);
 			Auctions::<T>::remove(&auction_key);
 			Self::deposit_event(Event::<T>::Confirmed { auction_key });
+			Ok(())
+		}
+
+		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,1))]
+		pub fn cancel(origin: OriginFor<T>, auction_key: Key<T>) -> DispatchResult {
+			// only owner of auction can cancel
+			let owner = ensure_signed(origin)?;
+			ensure!(owner == auction_key.0, Error::<T>::OwnerRequired);
+			// fetch auction and top bid
+			let auction = Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionIdNotFound)?;
+			if let Some(((bidder, _), price)) = Bids::<T>::get(&auction_key, Key::<T>::default()) {
+				// only unassigned auctions can be cancelled
+				ensure!(!auction.is_assigned(price), Error::<T>::AuctionAssigned);
+				// unreserve deposits of bidder and owner
+				T::Currency::unreserve(&bidder, auction.deposit);
+				T::Currency::unreserve(&owner, auction.deposit + auction.bounty);
+				// owner pays bidder the deposit
+				T::Currency::transfer(
+					&owner,
+					&bidder,
+					auction.deposit,
+					ExistenceRequirement::AllowDeath,
+				)
+				.unwrap();
+			} else {
+				// unreserve deposits of owner
+				T::Currency::unreserve(&owner, auction.deposit + auction.bounty);
+			}
+			// delete auction from storage
+			Bids::<T>::remove_prefix(&auction_key, None);
+			Auctions::<T>::remove(&auction_key);
+			Self::deposit_event(Event::<T>::Cancelled { auction_key });
 			Ok(())
 		}
 
