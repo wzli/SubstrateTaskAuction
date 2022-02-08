@@ -45,7 +45,7 @@ pub mod pallet {
 	// Errors inform users that something went wrong.
 	#[pallet::error]
 	pub enum Error<T> {
-		AuctionIdNotFound,
+		AuctionKeyNotFound,
 		AuctionAssigned,
 		AuctionNotAssigned,
 		AuctionDisputed,
@@ -165,12 +165,12 @@ pub mod pallet {
 			bounty: BalanceOf<T>,
 			terminal_block: T::BlockNumber,
 		) -> DispatchResult {
-			// only owner of auction can extend
 			let owner = ensure_signed(origin)?;
+			let mut auction =
+				Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionKeyNotFound)?;
+			// only owner of auction can extend
 			ensure!(owner == auction_key.0, Error::<T>::OwnerRequired);
 			// ensure auction is not assigned
-			let mut auction =
-				Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionIdNotFound)?;
 			if let Some((_, price)) = Bids::<T>::get(&auction_key, Key::<T>::default()) {
 				ensure!(!auction.is_assigned(price), Error::<T>::AuctionAssigned);
 			}
@@ -194,7 +194,7 @@ pub mod pallet {
 		) -> DispatchResult {
 			// input checks
 			let bidder = ensure_signed(origin)?;
-			let auction = Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionIdNotFound)?;
+			let auction = Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionKeyNotFound)?;
 			ensure!(bidder != auction_key.0, Error::<T>::OriginProhibited);
 			ensure!(bidder != auction.arbitrator, Error::<T>::OriginProhibited);
 
@@ -232,7 +232,7 @@ pub mod pallet {
 		pub fn retract(origin: OriginFor<T>, auction_key: Key<T>) -> DispatchResult {
 			let bidder = ensure_signed(origin)?;
 			// fetch auction and previous bid
-			let auction = Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionIdNotFound)?;
+			let auction = Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionKeyNotFound)?;
 			let (top_key, top_price) = Bids::<T>::get(&auction_key, Key::<T>::default())
 				.ok_or(Error::<T>::TopBidRequired)?;
 			// only the top bid can be retracted
@@ -270,11 +270,11 @@ pub mod pallet {
 
 		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,1))]
 		pub fn confirm(origin: OriginFor<T>, auction_key: Key<T>) -> DispatchResult {
-			// only owner of auction can confirm
 			let owner = ensure_signed(origin)?;
-			ensure!(owner == auction_key.0, Error::<T>::OwnerRequired);
 			// fetch auction and top bid
-			let auction = Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionIdNotFound)?;
+			let auction = Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionKeyNotFound)?;
+			// only owner of auction can confirm
+			ensure!(owner == auction_key.0, Error::<T>::OwnerRequired);
 			if let Some(((bidder, _), price)) = Bids::<T>::get(&auction_key, Key::<T>::default()) {
 				// only assigned auctions can be confirmed
 				ensure!(auction.is_assigned(price), Error::<T>::AuctionNotAssigned);
@@ -296,11 +296,11 @@ pub mod pallet {
 
 		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,1))]
 		pub fn cancel(origin: OriginFor<T>, auction_key: Key<T>) -> DispatchResult {
-			// only owner of auction can cancel
 			let owner = ensure_signed(origin)?;
-			ensure!(owner == auction_key.0, Error::<T>::OwnerRequired);
 			// fetch auction and top bid
-			let auction = Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionIdNotFound)?;
+			let auction = Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionKeyNotFound)?;
+			// only owner of auction can cancel
+			ensure!(owner == auction_key.0, Error::<T>::OwnerRequired);
 			if let Some(((bidder, _), price)) = Bids::<T>::get(&auction_key, Key::<T>::default()) {
 				// only unassigned auctions can be cancelled
 				ensure!(!auction.is_assigned(price), Error::<T>::AuctionAssigned);
@@ -331,7 +331,7 @@ pub mod pallet {
 			let origin = ensure_signed(origin)?;
 			// fetch auction
 			let mut auction =
-				Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionIdNotFound)?;
+				Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionKeyNotFound)?;
 			// auction is already in dispute
 			ensure!(!auction.in_dispute, Error::<T>::AuctionDisputed);
 			// fetch top bid
@@ -355,7 +355,7 @@ pub mod pallet {
 			fulfilled: bool,
 		) -> DispatchResult {
 			let arbitrator = ensure_signed(origin)?;
-			let auction = Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionIdNotFound)?;
+			let auction = Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionKeyNotFound)?;
 			// only the arbitrator is allowed
 			ensure!(arbitrator == auction.arbitrator, Error::<T>::OriginProhibited);
 			// auction must be in dispute
