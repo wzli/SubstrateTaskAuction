@@ -229,3 +229,100 @@ fn retract() {
 		}
 	})
 }
+
+#[test]
+fn confirm() {
+	new_test_ext().execute_with(|| {
+		// non existing auction
+		assert_err!(
+			TaskAuction::confirm(Origin::signed(0xC), (0, 0)),
+			Error::<Test>::AuctionKeyNotFound
+		);
+		// create an auction
+		let deposit = 500;
+		assert_ok!(TaskAuction::create(Origin::signed(0xA), 0xB, 1000, deposit, 5, vec![0; 8]));
+		if let AuctionEvent::Created { auction_key, bounty: _, terminal_block: _ } = last_event() {
+			// only own of the auction can confirm
+			assert_err!(
+				TaskAuction::confirm(Origin::signed(0xC), auction_key),
+				Error::<Test>::OwnerRequired
+			);
+			// can't confirm an auction with no bids
+			assert_err!(
+				TaskAuction::confirm(Origin::signed(0xA), auction_key),
+				Error::<Test>::AuctionNotAssigned
+			);
+			// make a bid
+			let pay = 900;
+			assert_ok!(TaskAuction::bid(Origin::signed(0xC), auction_key, pay));
+			assert_eq!(Balances::reserved_balance(&0xA), deposit + 1000);
+			assert_eq!(Balances::reserved_balance(&0xC), deposit);
+			// cannot confirm an auction that hasn't been assigned
+			assert_err!(
+				TaskAuction::confirm(Origin::signed(0xA), auction_key),
+				Error::<Test>::AuctionNotAssigned
+			);
+			// wait until auction is assigned
+			System::set_block_number(10);
+			// expect success
+			assert_ok!(TaskAuction::confirm(Origin::signed(0xA), auction_key));
+			// check payements
+			assert_eq!(Balances::reserved_balance(&0xA), 0);
+			assert_eq!(Balances::reserved_balance(&0xC), 0);
+			assert_eq!(Balances::free_balance(&0xA), 10000 - pay);
+			assert_eq!(Balances::free_balance(&0xC), 10000 + pay);
+			// auction should be deleted after transaction
+			assert!(TaskAuction::auctions(auction_key).is_none());
+			assert!(TaskAuction::bids(auction_key, (0, 0)).is_none());
+		}
+	})
+}
+
+#[test]
+fn cancel() {
+	new_test_ext().execute_with(|| {
+		// non existing auction
+		assert_err!(
+			TaskAuction::cancel(Origin::signed(0xC), (0, 0)),
+			Error::<Test>::AuctionKeyNotFound
+		);
+		let deposit = 500;
+		assert_ok!(TaskAuction::create(Origin::signed(0xA), 0xB, 1000, deposit, 5, vec![0; 8]));
+		if let AuctionEvent::Created { auction_key, bounty: _, terminal_block: _ } = last_event() {
+			// only own of the auction can cancel
+			assert_err!(
+				TaskAuction::cancel(Origin::signed(0xC), auction_key),
+				Error::<Test>::OwnerRequired
+			);
+			// successful cancel with no bids
+			assert_ok!(TaskAuction::cancel(Origin::signed(0xA), auction_key));
+			assert_eq!(Balances::reserved_balance(&0xA), 0);
+			assert_eq!(Balances::free_balance(&0xA), 10000);
+			assert!(TaskAuction::auctions(auction_key).is_none());
+			assert!(TaskAuction::bids(auction_key, (0, 0)).is_none());
+		}
+
+		assert_ok!(TaskAuction::create(Origin::signed(0xA), 0xB, 1000, deposit, 5, vec![0; 8]));
+		if let AuctionEvent::Created { auction_key, bounty: _, terminal_block: _ } = last_event() {
+			assert_ok!(TaskAuction::bid(Origin::signed(0xC), auction_key, 800));
+			assert_eq!(Balances::reserved_balance(&0xC), deposit);
+
+			// cannot cancel auction that has been assigned
+			System::set_block_number(10);
+			assert_err!(
+				TaskAuction::cancel(Origin::signed(0xA), auction_key),
+				Error::<Test>::AuctionAssigned
+			);
+			System::set_block_number(1);
+
+			// canceling auction with unassigned bids result in lost of deposit
+			assert_ok!(TaskAuction::cancel(Origin::signed(0xA), auction_key));
+			assert_eq!(Balances::reserved_balance(&0xA), 0);
+			assert_eq!(Balances::reserved_balance(&0xC), 0);
+			assert_eq!(Balances::free_balance(&0xA), 10000 - deposit);
+			assert_eq!(Balances::free_balance(&0xC), 10000 + deposit);
+			assert!(TaskAuction::auctions(auction_key).is_none());
+			assert!(TaskAuction::bids(auction_key, (0, 0)).is_none());
+		}
+	})
+}
