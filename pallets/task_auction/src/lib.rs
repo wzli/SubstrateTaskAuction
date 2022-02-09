@@ -219,8 +219,7 @@ pub mod pallet {
 			// all checks pass, reserve deposit of new bidder
 			T::Currency::reserve(&bidder, auction.deposit)?;
 			// insert new bid
-			let nonce = frame_system::Pallet::<T>::account_nonce(&bidder);
-			let bid_key = (bidder, nonce);
+			let bid_key = (bidder, prev_key.1 + 1u8.into());
 			Bids::<T>::insert(&auction_key, &bid_key, (prev_key, price));
 			Bids::<T>::insert(&auction_key, Key::<T>::default(), (bid_key.clone(), price));
 
@@ -233,15 +232,15 @@ pub mod pallet {
 			let bidder = ensure_signed(origin)?;
 			// fetch auction and previous bid
 			let auction = Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionKeyNotFound)?;
-			let (top_key, top_price) = Bids::<T>::get(&auction_key, Key::<T>::default())
+			let (mut top_key, top_price) = Bids::<T>::get(&auction_key, Key::<T>::default())
 				.ok_or(Error::<T>::TopBidRequired)?;
 			// only the top bid can be retracted
 			ensure!(bidder == top_key.0, Error::<T>::TopBidRequired);
 			// cannot retract bid when auction is in dispute
 			ensure!(!auction.in_dispute, Error::<T>::AuctionDisputed);
 			// bidder loses deposit to owner if auction is assigned
+			T::Currency::unreserve(&bidder, auction.deposit);
 			if auction.is_assigned(top_price) {
-				T::Currency::unreserve(&bidder, auction.deposit);
 				T::Currency::transfer(
 					&bidder,
 					&auction_key.0,
@@ -250,21 +249,30 @@ pub mod pallet {
 				)
 				.unwrap();
 			}
-			// update bids table
-			let (prev_key, _) = Bids::<T>::take(&auction_key, &top_key).unwrap();
-			let price = if prev_key == Key::<T>::default() {
-				Bids::<T>::remove(&auction_key, Key::<T>::default());
-				auction.bounty
-			} else {
-				let (_, prev_price) = Bids::<T>::get(&auction_key, &prev_key).unwrap();
-				Bids::<T>::insert(
-					&auction_key,
-					Key::<T>::default(),
-					(prev_key.clone(), prev_price),
-				);
-				prev_price
+
+			let (bid_key, price) = loop {
+				// remove top bid
+				let (prev_key, _) = Bids::<T>::take(&auction_key, &top_key).unwrap();
+				// if there is no previous bid, reset bid vector
+				if prev_key == Key::<T>::default() {
+					Bids::<T>::remove_prefix(&auction_key, None);
+					break (prev_key, auction.bounty)
+				}
+				// use previous bid as top bid if funds can be reserved
+				else if T::Currency::reserve(&prev_key.0, auction.deposit).is_ok() {
+					let (_, prev_price) = Bids::<T>::get(&auction_key, &prev_key).unwrap();
+					Bids::<T>::insert(
+						&auction_key,
+						Key::<T>::default(),
+						(prev_key.clone(), prev_price),
+					);
+					break (prev_key, prev_price)
+				}
+				// otherwise continue down the stack
+				top_key = prev_key;
 			};
-			Self::deposit_event(Event::<T>::Retracted { auction_key, bid_key: prev_key, price });
+
+			Self::deposit_event(Event::<T>::Retracted { auction_key, bid_key, price });
 			Ok(())
 		}
 
@@ -344,6 +352,7 @@ pub mod pallet {
 				Err(Error::<T>::AuctionNotAssigned)?
 			}
 			auction.in_dispute = true;
+			Auctions::<T>::insert(&auction_key, auction);
 			Self::deposit_event(Event::<T>::Disputed { auction_key });
 			Ok(())
 		}

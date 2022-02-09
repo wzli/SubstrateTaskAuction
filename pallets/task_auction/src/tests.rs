@@ -140,6 +140,9 @@ fn bid() {
 				let price = (300 - (i * 6)) as u128;
 				assert_ok!(TaskAuction::bid(Origin::signed(0xD), auction_key, price));
 				assert_eq!(TaskAuction::bids(auction_key, (0, 0)).unwrap().1, price);
+				if let AuctionEvent::Bid { auction_key: _, bid_key, price: _ } = last_event() {
+					assert_eq!(bid_key, (0xD, i + 1));
+				}
 			}
 			assert_eq!(Balances::reserved_balance(&0xC), 0);
 			assert_eq!(Balances::reserved_balance(&0xD), 500);
@@ -147,6 +150,81 @@ fn bid() {
 			assert_err!(
 				TaskAuction::bid(Origin::signed(0xC), auction_key, 100),
 				Error::<Test>::AuctionAssigned
+			);
+		}
+	})
+}
+
+#[test]
+fn retract() {
+	new_test_ext().execute_with(|| {
+		// no auction yet
+		assert_err!(
+			TaskAuction::retract(Origin::signed(0xC), (0, 0)),
+			Error::<Test>::AuctionKeyNotFound
+		);
+		// create auction
+		let deposit = 500;
+		assert_ok!(TaskAuction::create(Origin::signed(0xA), 0xB, 1000, deposit, 5, vec![0; 8]));
+		if let AuctionEvent::Created { auction_key, bounty: _, terminal_block: _ } = last_event() {
+			// insert 10 bids from C
+			for i in 0..10 {
+				let price = (500 - (i * 10)) as u128;
+				assert_ok!(TaskAuction::bid(Origin::signed(0xC), auction_key, price));
+				assert_eq!(Balances::reserved_balance(&0xC), deposit);
+			}
+			// insert 10 bids from D
+			for i in 10..20 {
+				let price = (500 - (i * 10)) as u128;
+				assert_ok!(TaskAuction::bid(Origin::signed(0xD), auction_key, price));
+				assert_eq!(Balances::reserved_balance(&0xD), deposit);
+				assert_eq!(Balances::reserved_balance(&0xC), 0);
+			}
+			// C can't retract because top bid is from D
+			assert_err!(
+				TaskAuction::retract(Origin::signed(0xC), auction_key),
+				Error::<Test>::TopBidRequired
+			);
+
+			// retract 10 bids from D
+			assert_eq!(Balances::reserved_balance(&0xD), deposit);
+			assert_eq!(Balances::reserved_balance(&0xC), 0);
+			for _ in 0..10 {
+				assert_ok!(TaskAuction::retract(Origin::signed(0xD), auction_key));
+			}
+
+			// retract 10 bids from C
+			assert_eq!(Balances::reserved_balance(&0xC), deposit);
+			assert_eq!(Balances::reserved_balance(&0xD), 0);
+			for _ in 0..10 {
+				assert_ok!(TaskAuction::retract(Origin::signed(0xC), auction_key));
+			}
+			assert_eq!(Balances::reserved_balance(&0xC), 0);
+			assert_eq!(Balances::reserved_balance(&0xD), 0);
+			assert_eq!(Balances::free_balance(&0xC), 10000);
+			assert_eq!(Balances::free_balance(&0xD), 10000);
+
+			// auction has no bids left to retract
+			assert_err!(
+				TaskAuction::retract(Origin::signed(0xB), auction_key),
+				Error::<Test>::TopBidRequired
+			);
+
+			// assign auction to D
+			assert_ok!(TaskAuction::bid(Origin::signed(0xC), auction_key, 900));
+			assert_ok!(TaskAuction::bid(Origin::signed(0xD), auction_key, 800));
+			System::set_block_number(10);
+
+			// retracting bid from assigned auction results in losing deposit
+			assert_ok!(TaskAuction::retract(Origin::signed(0xD), auction_key));
+			assert_eq!(Balances::reserved_balance(&0xD), 0);
+			assert_eq!(Balances::free_balance(&0xD), 10000 - deposit);
+
+			// cannot retract bid from auction that is in dispute
+			assert_ok!(TaskAuction::dispute(Origin::signed(0xC), auction_key));
+			assert_err!(
+				TaskAuction::retract(Origin::signed(0xC), auction_key),
+				Error::<Test>::AuctionDisputed
 			);
 		}
 	})
