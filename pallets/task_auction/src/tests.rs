@@ -326,3 +326,106 @@ fn cancel() {
 		}
 	})
 }
+
+#[test]
+fn dispute_arbitrate() {
+	new_test_ext().execute_with(|| {
+		// non existing auction
+		assert_err!(
+			TaskAuction::dispute(Origin::signed(0xC), (0, 0)),
+			Error::<Test>::AuctionKeyNotFound
+		);
+		assert_err!(
+			TaskAuction::arbitrate(Origin::signed(0xC), (0, 0), false),
+			Error::<Test>::AuctionKeyNotFound
+		);
+		let deposit = 500;
+		let pay = 800;
+		assert_ok!(TaskAuction::create(Origin::signed(0xA), 0xB, 1000, deposit, 5, vec![0; 8]));
+		if let AuctionEvent::Created { auction_key, bounty: _, terminal_block: _ } = last_event() {
+			// cannot dispute auction with no bids
+			assert_err!(
+				TaskAuction::dispute(Origin::signed(0xA), auction_key),
+				Error::<Test>::AuctionNotAssigned
+			);
+			// cannot arbitrate auction that is not in dispute
+			assert_err!(
+				TaskAuction::arbitrate(Origin::signed(0xB), auction_key, false),
+				Error::<Test>::AuctionNotDisputed
+			);
+			// make a bid
+			assert_ok!(TaskAuction::bid(Origin::signed(0xC), auction_key, pay));
+
+			// only owner or bidder can dispute
+			assert_err!(
+				TaskAuction::dispute(Origin::signed(0xB), auction_key),
+				Error::<Test>::OriginProhibited
+			);
+			// only arbitrator can arbitrate
+			assert_err!(
+				TaskAuction::arbitrate(Origin::signed(0xC), auction_key, false),
+				Error::<Test>::OriginProhibited
+			);
+			// cannot dispute auction that has not been assigned
+			assert_err!(
+				TaskAuction::dispute(Origin::signed(0xC), auction_key),
+				Error::<Test>::AuctionNotAssigned
+			);
+			// wait until auction is assigned
+			System::set_block_number(10);
+
+			// cannot arbitrate auction that is not in dispute
+			assert_err!(
+				TaskAuction::arbitrate(Origin::signed(0xB), auction_key, false),
+				Error::<Test>::AuctionNotDisputed
+			);
+			// dispute auction
+			assert_ok!(TaskAuction::dispute(Origin::signed(0xC), auction_key));
+
+			// cannot dispute auction that is already in disputed
+			assert_err!(
+				TaskAuction::dispute(Origin::signed(0xA), auction_key),
+				Error::<Test>::AuctionDisputed
+			);
+
+			// successful arbitration task fulfilled
+			// owner pays bidder and loses deposit to arbitrator
+			assert_ok!(TaskAuction::arbitrate(Origin::signed(0xB), auction_key, true));
+			assert_eq!(Balances::reserved_balance(&0xA), 0);
+			assert_eq!(Balances::reserved_balance(&0xB), 0);
+			assert_eq!(Balances::reserved_balance(&0xC), 0);
+			assert_eq!(Balances::free_balance(&0xA), 10000 - deposit - pay);
+			assert_eq!(Balances::free_balance(&0xB), 10000 + deposit);
+			assert_eq!(Balances::free_balance(&0xC), 10000 + pay);
+			assert!(TaskAuction::auctions(auction_key).is_none());
+			assert!(TaskAuction::bids(auction_key, (0, 0)).is_none());
+		}
+	})
+}
+
+#[test]
+fn dispute_arbitrate_veto() {
+	new_test_ext().execute_with(|| {
+		let deposit = 500;
+		assert_ok!(TaskAuction::create(Origin::signed(0xA), 0xB, 1000, deposit, 5, vec![0; 8]));
+		if let AuctionEvent::Created { auction_key, bounty: _, terminal_block: _ } = last_event() {
+			// make a bid
+			assert_ok!(TaskAuction::bid(Origin::signed(0xC), auction_key, 800));
+			// wait until auction is assigned
+			System::set_block_number(10);
+			// dispute auction
+			assert_ok!(TaskAuction::dispute(Origin::signed(0xA), auction_key));
+			// successful arbitration task is not fulfilled
+			// owner doesn't pays bidder and bidder loses deposit to arbitrator
+			assert_ok!(TaskAuction::arbitrate(Origin::signed(0xB), auction_key, false));
+			assert_eq!(Balances::reserved_balance(&0xA), 0);
+			assert_eq!(Balances::reserved_balance(&0xB), 0);
+			assert_eq!(Balances::reserved_balance(&0xC), 0);
+			assert_eq!(Balances::free_balance(&0xA), 10000);
+			assert_eq!(Balances::free_balance(&0xB), 10000 + deposit);
+			assert_eq!(Balances::free_balance(&0xC), 10000 - deposit);
+			assert!(TaskAuction::auctions(auction_key).is_none());
+			assert!(TaskAuction::bids(auction_key, (0, 0)).is_none());
+		}
+	})
+}

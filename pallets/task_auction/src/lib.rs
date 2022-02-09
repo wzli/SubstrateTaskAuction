@@ -344,10 +344,10 @@ pub mod pallet {
 			ensure!(!auction.in_dispute, Error::<T>::AuctionDisputed);
 			// fetch top bid
 			if let Some(((bidder, _), price)) = Bids::<T>::get(&auction_key, Key::<T>::default()) {
-				// only assigned auctions can be disputed
-				ensure!(auction.is_assigned(price), Error::<T>::AuctionNotAssigned);
 				// only owner or bidder can dispute
 				ensure!(origin == bidder || origin == auction_key.0, Error::<T>::OriginProhibited);
+				// only assigned auctions can be disputed
+				ensure!(auction.is_assigned(price), Error::<T>::AuctionNotAssigned);
 			} else {
 				Err(Error::<T>::AuctionNotAssigned)?
 			}
@@ -368,7 +368,7 @@ pub mod pallet {
 			// only the arbitrator is allowed
 			ensure!(arbitrator == auction.arbitrator, Error::<T>::OriginProhibited);
 			// auction must be in dispute
-			ensure!(auction.in_dispute, Error::<T>::AuctionDisputed);
+			ensure!(auction.in_dispute, Error::<T>::AuctionNotDisputed);
 			// fetch bidder
 			let ((bidder, _), price) = Bids::<T>::get(&auction_key, Key::<T>::default()).unwrap();
 			// unreserve funds
