@@ -129,16 +129,15 @@ fn bid() {
 			TaskAuction::bid(Origin::signed(0xB), auction_key, 100),
 			Error::<Test>::OriginProhibited
 		);
-		assert_err!(
-			TaskAuction::bid(Origin::signed(0xC), auction_key, 1100),
-			Error::<Test>::MinBidRatioRequired
-		);
 
+		// allow bids that are higher than bounty
 		assert!(TaskAuction::bids(auction_key, (0, 0)).is_none());
+		assert_ok!(TaskAuction::bid(Origin::signed(0xC), auction_key, 1100));
+		// first bid within bounty
 		assert_ok!(TaskAuction::bid(Origin::signed(0xC), auction_key, 300));
 		assert_eq!(Balances::reserved_balance(&0xC), 500);
 		assert!(TaskAuction::bids(auction_key, (0, 0)).is_some());
-
+		// reject bids higher than previous bid
 		assert_err!(
 			TaskAuction::bid(Origin::signed(0xD), auction_key, 400),
 			Error::<Test>::MinBidRatioRequired
@@ -152,7 +151,7 @@ fn bid() {
 			if let AuctionEvent::Bid { auction_key: _, bid_key, price: _ } =
 				get_auction_event().unwrap()
 			{
-				assert_eq!(bid_key, (0xD, i + 1));
+				assert_eq!(bid_key, (0xD, i + 2));
 			}
 		}
 		assert_eq!(Balances::reserved_balance(&0xC), 0);
@@ -318,12 +317,34 @@ fn cancel() {
 		assert!(TaskAuction::auctions(auction_key).is_none());
 		assert!(TaskAuction::bids(auction_key, (0, 0)).is_none());
 
+		// make new auction
 		assert_ok!(TaskAuction::create(Origin::signed(0xA), 0xB, 1000, deposit, 5, vec![0; 8]));
 		let auction_key = match get_auction_event().unwrap() {
 			AuctionEvent::Created { auction_key, .. } => auction_key,
 			_ => panic!("wrong event"),
 		};
 
+		// bid above bounty
+		assert_ok!(TaskAuction::bid(Origin::signed(0xC), auction_key, 1500));
+		assert_eq!(Balances::reserved_balance(&0xC), deposit);
+
+		// canceling auction with bids above bounty is okay, won't lose deposit
+		assert_ok!(TaskAuction::cancel(Origin::signed(0xA), auction_key));
+		assert_eq!(Balances::reserved_balance(&0xA), 0);
+		assert_eq!(Balances::reserved_balance(&0xC), 0);
+		assert_eq!(Balances::free_balance(&0xA), 10000);
+		assert_eq!(Balances::free_balance(&0xC), 10000);
+		assert!(TaskAuction::auctions(auction_key).is_none());
+		assert!(TaskAuction::bids(auction_key, (0, 0)).is_none());
+
+		// make new auction
+		assert_ok!(TaskAuction::create(Origin::signed(0xA), 0xB, 1000, deposit, 5, vec![0; 8]));
+		let auction_key = match get_auction_event().unwrap() {
+			AuctionEvent::Created { auction_key, .. } => auction_key,
+			_ => panic!("wrong event"),
+		};
+
+		// bid below bounty
 		assert_ok!(TaskAuction::bid(Origin::signed(0xC), auction_key, 800));
 		assert_eq!(Balances::reserved_balance(&0xC), deposit);
 

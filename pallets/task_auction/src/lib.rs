@@ -174,8 +174,9 @@ pub mod pallet {
 			if let Some((_, price)) = Bids::<T>::get(&auction_key, Key::<T>::default()) {
 				ensure!(!auction.is_assigned(price), Error::<T>::AuctionAssigned);
 			}
+			// bounty must be higher than previous by MinBounty ammount
+			ensure!(bounty > auction.bounty + T::MinBounty::get(), Error::<T>::MinBountyRequired);
 			// reserve the difference in bounty
-			ensure!(bounty > auction.bounty, Error::<T>::MinBountyRequired);
 			T::Currency::reserve(&owner, bounty - auction.bounty)?;
 			// update auction
 			auction.bounty = bounty;
@@ -197,24 +198,21 @@ pub mod pallet {
 			let auction = Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionKeyNotFound)?;
 			ensure!(bidder != auction_key.0, Error::<T>::OriginProhibited);
 			ensure!(bidder != auction.arbitrator, Error::<T>::OriginProhibited);
-
 			// check if there is a previous bid
-			let prev_bid = Bids::<T>::get(&auction_key, Key::<T>::default());
-			let prev_key = if let Some((prev_key, prev_price)) = prev_bid {
-				// ensure auction is not assigned
-				ensure!(!auction.is_assigned(prev_price), Error::<T>::AuctionAssigned);
-				// ensure new bid is lower than prev bid
-				ensure!(
-					prev_price * T::MinBidRatio::get().into() > price * 255u8.into(),
-					Error::<T>::MinBidRatioRequired
-				);
-				// unreserve deposit of previous bidder
-				T::Currency::unreserve(&prev_key.0, auction.deposit);
-				prev_key
-			} else {
-				// first bid must be within bounty
-				ensure!(auction.bounty >= price, Error::<T>::MinBidRatioRequired);
-				Key::<T>::default()
+			let prev_key = match Bids::<T>::get(&auction_key, Key::<T>::default()) {
+				Some((prev_key, prev_price)) => {
+					// ensure auction is not assigned
+					ensure!(!auction.is_assigned(prev_price), Error::<T>::AuctionAssigned);
+					// ensure new bid is lower than prev bid
+					ensure!(
+						prev_price * T::MinBidRatio::get().into() > price * 255u8.into(),
+						Error::<T>::MinBidRatioRequired
+					);
+					// unreserve deposit of previous bidder
+					T::Currency::unreserve(&prev_key.0, auction.deposit);
+					prev_key
+				},
+				_ => Key::<T>::default(),
 			};
 			// all checks pass, reserve deposit of new bidder
 			T::Currency::reserve(&bidder, auction.deposit)?;
@@ -314,14 +312,16 @@ pub mod pallet {
 				// unreserve deposits of bidder and owner
 				T::Currency::unreserve(&bidder, auction.deposit);
 				T::Currency::unreserve(&owner, auction.deposit + auction.bounty);
-				// owner pays bidder the deposit
-				T::Currency::transfer(
-					&owner,
-					&bidder,
-					auction.deposit,
-					ExistenceRequirement::AllowDeath,
-				)
-				.unwrap();
+				// owner pays bidder the deposit if bid is within range of bounty
+				if price <= auction.bounty {
+					T::Currency::transfer(
+						&owner,
+						&bidder,
+						auction.deposit,
+						ExistenceRequirement::AllowDeath,
+					)
+					.unwrap();
+				}
 			} else {
 				// unreserve deposits of owner
 				T::Currency::unreserve(&owner, auction.deposit + auction.bounty);
