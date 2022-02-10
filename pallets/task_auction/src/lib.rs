@@ -279,22 +279,21 @@ pub mod pallet {
 		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,1))]
 		pub fn confirm(origin: OriginFor<T>, auction_key: Key<T>) -> DispatchResult {
 			let owner = ensure_signed(origin)?;
-			// fetch auction and top bid
+			// fetch auction
 			let auction = Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionKeyNotFound)?;
 			// only owner of auction can confirm
 			ensure!(owner == auction_key.0, Error::<T>::OwnerRequired);
-			if let Some(((bidder, _), price)) = Bids::<T>::get(&auction_key, Key::<T>::default()) {
-				// only assigned auctions can be confirmed
-				ensure!(auction.is_assigned(price), Error::<T>::AuctionNotAssigned);
-				// unreserve deposits of bidder and owner
-				T::Currency::unreserve(&bidder, auction.deposit);
-				T::Currency::unreserve(&owner, auction.deposit + auction.bounty);
-				// owner pays bidder the agreed price
-				T::Currency::transfer(&owner, &bidder, price, ExistenceRequirement::AllowDeath)
-					.unwrap();
-			} else {
-				Err(Error::<T>::AuctionNotAssigned)?;
-			}
+			// fetch to bid
+			let ((bidder, _), price) = Bids::<T>::get(&auction_key, Key::<T>::default())
+				.ok_or(Error::<T>::AuctionNotAssigned)?;
+			// only assigned auctions can be confirmed
+			ensure!(auction.is_assigned(price), Error::<T>::AuctionNotAssigned);
+			// unreserve deposits of bidder and owner
+			T::Currency::unreserve(&bidder, auction.deposit);
+			T::Currency::unreserve(&owner, auction.deposit + auction.bounty);
+			// owner pays bidder the agreed price
+			T::Currency::transfer(&owner, &bidder, price, ExistenceRequirement::AllowDeath)
+				.unwrap();
 			// delete auction from storage
 			Bids::<T>::remove_prefix(&auction_key, None);
 			Auctions::<T>::remove(&auction_key);
@@ -343,14 +342,12 @@ pub mod pallet {
 			// auction is already in dispute
 			ensure!(!auction.in_dispute, Error::<T>::AuctionDisputed);
 			// fetch top bid
-			if let Some(((bidder, _), price)) = Bids::<T>::get(&auction_key, Key::<T>::default()) {
-				// only owner or bidder can dispute
-				ensure!(origin == bidder || origin == auction_key.0, Error::<T>::OriginProhibited);
-				// only assigned auctions can be disputed
-				ensure!(auction.is_assigned(price), Error::<T>::AuctionNotAssigned);
-			} else {
-				Err(Error::<T>::AuctionNotAssigned)?
-			}
+			let ((bidder, _), price) = Bids::<T>::get(&auction_key, Key::<T>::default())
+				.ok_or(Error::<T>::AuctionNotAssigned)?;
+			// only owner or bidder can dispute
+			ensure!(origin == bidder || origin == auction_key.0, Error::<T>::OriginProhibited);
+			// only assigned auctions can be disputed
+			ensure!(auction.is_assigned(price), Error::<T>::AuctionNotAssigned);
 			auction.in_dispute = true;
 			Auctions::<T>::insert(&auction_key, auction);
 			Self::deposit_event(Event::<T>::Disputed { auction_key });
@@ -406,12 +403,11 @@ pub mod pallet {
 	// helper functions
 	impl<T: Config> Auction<T> {
 		pub fn get_base_price(&self) -> BalanceOf<T> {
-			let now = frame_system::Pallet::<T>::block_number();
-			if now < self.terminal_block {
-				self.bounty * (now - self.initial_block).saturated_into::<u32>().into() /
-					(self.terminal_block - self.initial_block).saturated_into::<u32>().into()
-			} else {
-				self.bounty
+			match frame_system::Pallet::<T>::block_number() {
+				now if now < self.terminal_block =>
+					self.bounty * (now - self.initial_block).saturated_into::<u32>().into() /
+						(self.terminal_block - self.initial_block).saturated_into::<u32>().into(),
+				_ => self.bounty,
 			}
 		}
 
