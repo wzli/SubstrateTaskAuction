@@ -232,12 +232,11 @@ fn retract() {
 		assert_eq!(Balances::reserved_balance(&0xD), 0);
 		assert_eq!(Balances::free_balance(&0xD), 10000 - deposit);
 
-		// cannot retract bid from auction that is in dispute
+		// retracting a disputed auction also results in losing deposit
 		assert_ok!(TaskAuction::dispute(Origin::signed(0xC), auction_key));
-		assert_err!(
-			TaskAuction::retract(Origin::signed(0xC), auction_key),
-			Error::<Test>::AuctionDisputed
-		);
+		assert_ok!(TaskAuction::retract(Origin::signed(0xC), auction_key));
+		assert_eq!(Balances::reserved_balance(&0xC), 0);
+		assert_eq!(Balances::free_balance(&0xC), 10000 - deposit);
 	})
 }
 

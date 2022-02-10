@@ -229,13 +229,12 @@ pub mod pallet {
 		pub fn retract(origin: OriginFor<T>, auction_key: Key<T>) -> DispatchResult {
 			let bidder = ensure_signed(origin)?;
 			// fetch auction and previous bid
-			let auction = Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionKeyNotFound)?;
+			let mut auction =
+				Auctions::<T>::get(&auction_key).ok_or(Error::<T>::AuctionKeyNotFound)?;
 			let (mut top_key, top_price) = Bids::<T>::get(&auction_key, Key::<T>::default())
 				.ok_or(Error::<T>::TopBidRequired)?;
 			// only the top bid can be retracted
 			ensure!(bidder == top_key.0, Error::<T>::TopBidRequired);
-			// cannot retract bid when auction is in dispute
-			ensure!(!auction.in_dispute, Error::<T>::AuctionDisputed);
 			// bidder loses deposit to owner if auction is assigned
 			T::Currency::unreserve(&bidder, auction.deposit);
 			if auction.is_assigned(top_price) {
@@ -269,7 +268,11 @@ pub mod pallet {
 				// otherwise continue down the stack
 				top_key = prev_key;
 			};
-
+			// clear dispute after disputed bid assignment is retracted
+			if auction.in_dispute {
+				auction.in_dispute = false;
+				Auctions::<T>::insert(&auction_key, auction);
+			}
 			Self::deposit_event(Event::<T>::Retracted { auction_key, bid_key, price });
 			Ok(())
 		}
