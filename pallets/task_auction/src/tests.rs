@@ -343,6 +343,9 @@ fn cancel() {
 			_ => panic!("wrong event"),
 		};
 
+		// query created auction
+		assert!(TaskAuction::auctions(auction_key).is_some());
+
 		// bid below bounty
 		assert_ok!(TaskAuction::bid(Origin::signed(0xC), auction_key, 800));
 		assert_eq!(Balances::reserved_balance(&0xC), deposit);
